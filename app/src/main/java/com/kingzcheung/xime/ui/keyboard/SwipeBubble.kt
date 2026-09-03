@@ -60,7 +60,7 @@ data class BubbleDrawData(
     val selectedLongPressIndex: Int,
     val bodyWidth: Float,
     val textStartX: Float,
-    val chaiTypeface: Typeface,
+    val keyLabelTypeface: Typeface,
     val shadowRadiusPx: Float,
     val textSizePx: Float,
     val selectedFontSizePx: Float,
@@ -162,7 +162,7 @@ fun rememberSwipeBubbleDrawData(
     } else keyBackgroundColor).toArgb()
     val textColor = (if (swipeState.isDanger) Color.White else keyTextColor).toArgb()
 
-    val chaiTypeface = AppFonts.chaiPuaTypeface
+    val keyLabelTypeface = AppFonts.keyLabelTypeface
 
     val textPaint = remember(bubbleScale) {
         Paint().apply {
@@ -247,7 +247,7 @@ fun rememberSwipeBubbleDrawData(
         selectedLongPressIndex = swipeState.selectedLongPressIndex,
         bodyWidth = bodyWidth,
         textStartX = bodyLeftInBox + paddingPx,
-        chaiTypeface = chaiTypeface,
+        keyLabelTypeface = keyLabelTypeface,
         shadowRadiusPx = shadowRadiusPx,
         textSizePx = textSizePx,
         selectedFontSizePx = selectedFontSizePx,
@@ -362,6 +362,7 @@ fun DrawScope.drawSwipeBubble(data: BubbleDrawData) {
                     bubbleLabelPaint.textSize = fontSize
                     bubbleLabelPaint.textAlign = Paint.Align.CENTER
                     bubbleLabelPaint.isFakeBoldText = true
+                    bubbleLabelPaint.typeface = data.keyLabelTypeface
                     val textY = data.bodyHeightPx / 2f - (bubbleLabelPaint.fontMetrics.ascent + bubbleLabelPaint.fontMetrics.descent) / 2f
                     canvas.drawText(item, itemLeft + cellWidth / 2f, textY, bubbleLabelPaint)
                 }
@@ -373,7 +374,7 @@ fun DrawScope.drawSwipeBubble(data: BubbleDrawData) {
             bubbleTextPaint.color = data.textColor
             bubbleTextPaint.textSize = data.textSizePx
             bubbleTextPaint.textAlign = Paint.Align.CENTER
-            bubbleTextPaint.typeface = data.chaiTypeface
+            bubbleTextPaint.typeface = data.keyLabelTypeface
             bubbleTextPaint.isFakeBoldText = true
             val textCenterX = data.pathBodyLeft + data.pathBodyWidth / 2f
             val textY = data.bodyHeightPx / 2f - (bubbleTextPaint.fontMetrics.ascent + bubbleTextPaint.fontMetrics.descent) / 2f

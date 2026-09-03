@@ -374,6 +374,14 @@ object ColorSchemeModeConfigSerializer :
     }
 }
 
+/** 字体配置，从 xime.yaml style 节点加载。字体文件放在 rime/fonts/ 目录下。 */
+data class KeyboardFontConfig(
+    val keyFont: String = "",
+    val keyLabelFont: String = "",
+    val candidateFont: String = "",
+    val commentFont: String = "",
+)
+
 @Serializable
 data class StyleConfig(
     @SerialName("color_scheme")
@@ -381,6 +389,14 @@ data class StyleConfig(
     val colorScheme: ColorSchemeModeConfig? = null,
     @SerialName("dark_mode")
     val darkMode: Int? = null,
+    @SerialName("key_font")
+    val keyFont: String? = null,
+    @SerialName("key_label_font")
+    val keyLabelFont: String? = null,
+    @SerialName("candidate_font")
+    val candidateFont: String? = null,
+    @SerialName("comment_font")
+    val commentFont: String? = null,
 )
 
 @Serializable
@@ -435,6 +451,10 @@ object KeysConfigHelper {
 
     // 键盘按键配置缓存
     private var keyboardKeyConfig: KeyboardKeyConfig = KeyboardKeyConfig()
+
+    // 字体配置缓存
+    private var keyboardFontConfig: KeyboardFontConfig = KeyboardFontConfig()
+    fun getKeyboardFontConfig(): KeyboardFontConfig = keyboardFontConfig
     
     // 按键布局模式缓存（中文 qwerty / 英文 qwerty_en）
     private var _buttonLayoutZh: ButtonLayout = ButtonLayout.STANDARD
@@ -490,6 +510,9 @@ object KeysConfigHelper {
             keyboardShadowConfig = parseKeyboardShadowFromAssets(context)
             // 键盘按键（从原始 YAML 手动解析）
             keyboardKeyConfig = parseKeyboardKeyFromAssets(context)
+            // 字体配置（从原始 YAML 手动解析）
+            keyboardFontConfig = parseKeyboardFontsFromAssets(context)
+            com.kingzcheung.xime.ui.keyboard.AppFonts.loadCustomFonts(keyboardFontConfig)
             // 按键布局（从原始 YAML 手动解析，中英文分开）
             val parsedLayouts = parseButtonLayoutFromAssets(context)
             _buttonLayoutZh = parsedLayouts.first
@@ -694,6 +717,44 @@ object KeysConfigHelper {
             }
         }
         return KeyboardKeyConfig(cornerRadius = cornerRadius)
+    }
+
+    /** 从 xime.yaml + xime.custom.yaml 合并解析字体配置。 */
+    private fun parseKeyboardFontsFromAssets(context: Context): KeyboardFontConfig {
+        val defaultText = readAssetText(context, XIME_CONFIG_FILE) ?: return KeyboardFontConfig()
+        val default = parseKeyboardFontsYamlText(defaultText) ?: return KeyboardFontConfig()
+        val custom = readUserDataText(context, XIME_CUSTOM_CONFIG_FILE)
+            ?.let { parseKeyboardFontsYamlText(it) }
+            ?: readAssetText(context, XIME_CUSTOM_CONFIG_FILE)
+                ?.let { parseKeyboardFontsYamlText(it) }
+        return custom ?: default
+    }
+
+    /** 从 YAML 文本中提取 keyboard.fonts 字体配置段。 */
+    private fun parseKeyboardFontsYamlText(yamlText: String): KeyboardFontConfig? {
+        val root = yaml.parseToYamlNode(yamlText) as? YamlMap ?: return null
+        val keyboardNode = root["keyboard"] as? YamlMap ?: return null
+        val fontsNode = keyboardNode["fonts"] as? YamlMap ?: return null
+        var keyFont = ""
+        var keyLabelFont = ""
+        var candidateFont = ""
+        var commentFont = ""
+        for ((kNode, vNode) in fontsNode.entries) {
+            val key = (kNode as? YamlScalar)?.content ?: continue
+            val value = (vNode as? YamlScalar)?.content ?: continue
+            when (key) {
+                "key_font" -> keyFont = value
+                "key_label_font" -> keyLabelFont = value
+                "candidate_font" -> candidateFont = value
+                "comment_font" -> commentFont = value
+            }
+        }
+        return KeyboardFontConfig(
+            keyFont = keyFont,
+            keyLabelFont = keyLabelFont,
+            candidateFont = candidateFont,
+            commentFont = commentFont
+        )
     }
 
     /** 从 xime.yaml + xime.custom.yaml 合并解析按键布局模式（中英文分开）。 */

@@ -150,6 +150,7 @@ fun HardwareKeyboardCandidateBar(
                                     color = if (isActive) selectedTextColor else candidateTextColor,
                                     fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
                                     maxLines = 1,
+                                    fontFamily = AppFonts.candidateFontFamily
                                 )
                             }
                         }

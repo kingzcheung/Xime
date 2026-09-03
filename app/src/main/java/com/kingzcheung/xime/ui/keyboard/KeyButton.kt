@@ -158,6 +158,8 @@ fun KeyButton(
     
     val density = LocalDensity.current
     val view = LocalView.current
+    val keyFontFamily = AppFonts.keyFontFamily
+    val keyLabelFontFamily = AppFonts.keyLabelFontFamily
     val currentOnClick by rememberUpdatedState(onClick)
     val currentOnLongClick by rememberUpdatedState(onLongClick)
     val currentOnRelease by rememberUpdatedState(onRelease)
@@ -340,7 +342,8 @@ fun KeyButton(
             fontSize = fontSize ?: if (text.length > 2) 14.sp else 16.sp,
             fontWeight = if (text.length > 2) FontWeight.Medium else FontWeight.Normal,
             textAlign = TextAlign.Center,
-            maxLines = 1
+            maxLines = 1,
+            fontFamily = keyFontFamily
         )
         
         if (!swipeText.isNullOrEmpty()) {
@@ -352,7 +355,8 @@ fun KeyButton(
                 fontWeight = FontWeight.Normal,
                 textAlign = TextAlign.Center,
                 maxLines = 1,
-                modifier = Modifier.offset(y = (-14).dp)
+                modifier = Modifier.offset(y = (-14).dp),
+                fontFamily = keyLabelFontFamily
             )
         }
         
@@ -366,7 +370,8 @@ fun KeyButton(
                 maxLines = 1,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(top = 6.dp, end = 6.dp)
+                    .padding(top = 6.dp, end = 6.dp),
+                fontFamily = keyLabelFontFamily
             )
         }
     }
@@ -456,7 +461,8 @@ fun SwipeableKeyButton(
     }
     val keyCornerRadius = LocalKeyCornerRadius.current
     val keyClipShape = remember(keyCornerRadius) { RoundedCornerShape(keyCornerRadius) }
-    val chaiPuaFontFamily = AppFonts.chaiPuaFontFamily
+    val keyLabelFontFamily = AppFonts.keyLabelFontFamily
+    val keyFontFamily = AppFonts.keyFontFamily
 
     BoxWithConstraints(
         modifier = modifier
@@ -701,7 +707,8 @@ fun SwipeableKeyButton(
                         lineHeight = 1.sp,
                         modifier = Modifier
                             .align(Alignment.TopStart)
-                            .padding(top = 2.dp, start = 4.dp)
+                            .padding(top = 2.dp, start = 4.dp),
+                        fontFamily = keyFontFamily
                     )
                 }
 
@@ -745,7 +752,7 @@ fun SwipeableKeyButton(
                                 textAlign = TextAlign.Right,
                                 maxLines = 3,
                                 lineHeight = adjustedFontSize,
-                                fontFamily = chaiPuaFontFamily
+                                fontFamily = keyLabelFontFamily
                             )
                         }
                     }
@@ -766,7 +773,8 @@ fun SwipeableKeyButton(
                     fontSize = ((if (fontSize != androidx.compose.ui.unit.TextUnit.Unspecified) fontSize.value else if (text.length > 2) 14f else 18f) * contentScale).sp,
                     fontWeight = if (text.length > 2) FontWeight.Medium else FontWeight.Normal,
                     textAlign = TextAlign.Center,
-                    maxLines = 1
+                    maxLines = 1,
+                    fontFamily = keyFontFamily
                 )
             }
 
@@ -780,7 +788,8 @@ fun SwipeableKeyButton(
                     fontWeight = FontWeight.Medium,
                     textAlign = TextAlign.Center,
                     maxLines = 1,
-                    modifier = Modifier.offset(y = -hintOffset)
+                    modifier = Modifier.offset(y = -hintOffset),
+                    fontFamily = keyLabelFontFamily
                 )
             }
 
@@ -793,7 +802,8 @@ fun SwipeableKeyButton(
                     fontWeight = FontWeight.Normal,
                     textAlign = TextAlign.Center,
                     maxLines = 1,
-                    modifier = Modifier.offset(y = hintOffset)
+                    modifier = Modifier.offset(y = hintOffset),
+                    fontFamily = keyLabelFontFamily
                 )
             }
 
@@ -996,6 +1006,7 @@ fun SwipeableIconKeyButton(
     var dragActivated by remember { mutableStateOf(false) }
     val currentOnClick by rememberUpdatedState(onClick)
     val currentOnRelease by rememberUpdatedState(onRelease)
+    val keyLabelFontFamily = AppFonts.keyLabelFontFamily
     
     val density = LocalDensity.current
     val swipeUpThreshold = with(density) { (-50).dp.toPx() }
@@ -1245,7 +1256,8 @@ fun SwipeableIconKeyButton(
                 fontWeight = FontWeight.Normal,
                 textAlign = TextAlign.Center,
                 maxLines = 1,
-                modifier = Modifier.offset(y = (-14).dp)
+                modifier = Modifier.offset(y = (-14).dp),
+                fontFamily = keyLabelFontFamily
             )
         }
     }

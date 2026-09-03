@@ -327,13 +327,13 @@ private fun CircularDPad(
 private val directionLabelPaint = android.graphics.Paint().apply {
     isAntiAlias = true
     textAlign = android.graphics.Paint.Align.CENTER
-    typeface = android.graphics.Typeface.DEFAULT_BOLD
+    typeface = AppFonts.keyFontTypeface
 }
 
 private val centerLabelPaint = android.graphics.Paint().apply {
     isAntiAlias = true
     textAlign = android.graphics.Paint.Align.CENTER
-    typeface = android.graphics.Typeface.DEFAULT_BOLD
+    typeface = AppFonts.keyFontTypeface
 }
 
 @Composable
@@ -389,7 +389,8 @@ private fun SideButton(
             color = textColor,
             fontSize = 14.sp,
             textAlign = TextAlign.Center,
-            maxLines = 1
+            maxLines = 1,
+            fontFamily = AppFonts.keyFontFamily
         )
     }
 }

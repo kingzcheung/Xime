@@ -16,14 +16,35 @@ import java.io.InputStream
 import kotlin.math.max
 
 /**
+ * 解析主题图片路径为 File 对象。
+ * 支持四种格式（与字体配置一致）：
+ * - 绝对路径（以 / 开头）：相对于应用数据根目录，如 /themes/bg.png → files/themes/bg.png
+ * - rime/ 开头：相对于应用数据根目录，如 rime/themes/bg.png → files/rime/themes/bg.png
+ * - 其他相对路径（包含 / 但不以 / 开头）：相对于 rime/ 目录，如 themes/bg.png → files/rime/themes/bg.png
+ * - 仅文件名（不包含 /）：相对于 rime/ 目录（配置文件同目录）查找
+ */
+private fun resolveThemeImagePath(context: Context, src: String): File {
+    val filesBase = context.filesDir.canonicalFile
+    val rimeBase = File(filesBase, "rime").canonicalFile
+    return when {
+        src.startsWith("/") -> File(filesBase, src.removePrefix("/")).canonicalFile
+        src.startsWith("rime/") -> File(filesBase, src).canonicalFile
+        else -> File(rimeBase, src).canonicalFile
+    }
+}
+
+/**
  * 打开主题背景图片流。
- * 优先读取用户数据目录（context.filesDir/rime/<src>，用户可自行放入或通过分享导入），
+ * 优先读取用户数据目录（规则见 [resolveThemeImagePath]，用户可自行放入或通过分享导入），
  * 找不到再回退到内置 assets/<src>。
  */
 fun openThemeImageStream(context: Context, src: String): InputStream? {
+    val userFile = resolveThemeImagePath(context, src)
     val rimeBase = File(context.filesDir, "rime").canonicalFile
-    val userFile = File(rimeBase, src).canonicalFile
-    if (userFile.isFile && userFile.path.startsWith(rimeBase.path + File.separator)) {
+    val filesBase = context.filesDir.canonicalFile
+    val withinBase = userFile.path.startsWith(rimeBase.path + File.separator) ||
+        userFile.path.startsWith(filesBase.path + File.separator)
+    if (userFile.isFile && withinBase) {
         return FileInputStream(userFile)
     }
     return try {
@@ -280,7 +301,7 @@ object KeyboardThemes {
 
     /** 生成种子色缓存键：src + 文件大小/修改时间，文件变化后自动失效。 */
     private fun themeSeedCacheKey(context: Context, src: String): String {
-        val userFile = File(context.filesDir, "rime/$src")
+        val userFile = resolveThemeImagePath(context, src)
         val file = if (userFile.isFile) userFile else null
         val size = file?.length() ?: -1L
         val mtime = file?.lastModified() ?: -1L

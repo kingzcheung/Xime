@@ -223,7 +223,9 @@ class WirelessImportHelper(private val context: Context) {
                     name.endsWith(".tgz", ignoreCase = true) ||
                     name.endsWith(".yaml") || name.endsWith(".schema.yaml") || name.endsWith(".dict.yaml") ||
                     name.endsWith(".jpg", ignoreCase = true) || name.endsWith(".jpeg", ignoreCase = true) ||
-                    name.endsWith(".png", ignoreCase = true) -> {
+                    name.endsWith(".png", ignoreCase = true) ||
+                    name.endsWith(".ttf", ignoreCase = true) || name.endsWith(".otf", ignoreCase = true) ||
+                    name.endsWith(".woff", ignoreCase = true) || name.endsWith(".woff2", ignoreCase = true) -> {
                         // 经临时文件传递给 ImportManager，避免大文件 ByteArray OOM
                         val partFile = File.createTempFile("part_", "_$name", context.cacheDir)
                         try {
@@ -266,7 +268,7 @@ class WirelessImportHelper(private val context: Context) {
                         if (saved) {
                             call.respondText("""{"success":true,"file":"$lastName"}""", ContentType.Application.Json)
                         } else {
-                            call.respondText("""{"success":false,"error":"No valid file (supported: .yaml, .zip, .tar.gz, .jpg/.png)"}""",
+                            call.respondText("""{"success":false,"error":"No valid file (supported: .yaml, .zip, .tar.gz, .jpg/.png, .ttf/.otf/.woff/.woff2)"}""",
                                 ContentType.Application.Json, HttpStatusCode.BadRequest)
                         }
                     } finally {

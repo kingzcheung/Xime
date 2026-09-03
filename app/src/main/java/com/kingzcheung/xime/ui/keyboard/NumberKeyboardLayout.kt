@@ -563,7 +563,8 @@ private fun NumberSymbolKey(
             color = textColor,
             fontSize = fontSize,
             fontWeight = FontWeight.Normal,
-            modifier = Modifier.padding(vertical = 2.dp)
+            modifier = Modifier.padding(vertical = 2.dp),
+            fontFamily = AppFonts.keyFontFamily
         )
     }
 }
