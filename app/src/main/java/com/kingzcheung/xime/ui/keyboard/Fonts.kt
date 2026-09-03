@@ -26,6 +26,9 @@ object AppFonts {
     private lateinit var filesDir: File
     private lateinit var rimeDir: File
 
+    // 当前已加载的字体配置（用于跳过未变更的重复加载）
+    private var loadedConfigHash: Int = 0
+
     /** ChaiPUA 字体，用于显示 CJK 扩展区字符（如五笔字根） */
     val chaiPuaTypeface: Typeface by lazy {
         Typeface.createFromAsset(assetManager, CHAI_PUA_FONT)
@@ -49,10 +52,19 @@ object AppFonts {
     private var _candidateFontFamily: FontFamily? = null
     private var _commentFontFamily: FontFamily? = null
 
+    // 粗体 Typeface 缓存（避免每次访问都新建）
+    private var _keyFontTypeface: Typeface? = null
+
     /** 按键主字 Typeface */
     val keyTypeface: Typeface get() = _keyTypeface ?: Typeface.DEFAULT
     /** 按键主字粗体 Typeface（用于编辑键盘方向标签等） */
-    val keyFontTypeface: Typeface get() = Typeface.create(keyTypeface, Typeface.BOLD)
+    val keyFontTypeface: Typeface get() {
+        val cached = _keyFontTypeface
+        if (cached != null) return cached
+        val created = Typeface.create(keyTypeface, Typeface.BOLD)
+        _keyFontTypeface = created
+        return created
+    }
     /** 字根标签 Typeface */
     val keyLabelTypeface: Typeface get() = _keyLabelTypeface ?: chaiPuaTypeface
     /** 候选项 Typeface */
@@ -80,19 +92,28 @@ object AppFonts {
     /**
      * 加载自定义字体配置。
      * 在 KeysConfigHelper.loadConfig() 时调用，配置变更时也会重新调用。
+     * 配置未变更时跳过重新解析（避免 reloadConfig 重复触发时反复加载大字体文件）。
      * 字体加载后缓存在内存中，后续直接使用缓存的 Typeface/FontFamily。
      */
     fun loadCustomFonts(config: KeyboardFontConfig) {
         if (!initialized) return
+        val hash = config.hashCode()
+        if (hash == loadedConfigHash) return
+        loadedConfigHash = hash
+
         _keyTypeface = loadTypeface(config.keyFont)
         _keyLabelTypeface = loadTypeface(config.keyLabelFont)
         _candidateTypeface = loadTypeface(config.candidateFont)
         _commentTypeface = loadTypeface(config.commentFont)
 
-        _keyFontFamily = loadFontFamily(config.keyFont)
-        _keyLabelFontFamily = loadFontFamily(config.keyLabelFont)
-        _candidateFontFamily = loadFontFamily(config.candidateFont)
-        _commentFontFamily = loadFontFamily(config.commentFont)
+        // 复用已解析的 Typeface 构造 FontFamily，避免同一字体文件被解析两次
+        _keyFontFamily = loadFontFamily(config.keyFont, _keyTypeface)
+        _keyLabelFontFamily = loadFontFamily(config.keyLabelFont, _keyLabelTypeface)
+        _candidateFontFamily = loadFontFamily(config.candidateFont, _candidateTypeface)
+        _commentFontFamily = loadFontFamily(config.commentFont, _commentTypeface)
+
+        // 粗体缓存失效
+        _keyFontTypeface = null
 
         Log.d(TAG, "Custom fonts loaded: key=${config.keyFont}, keyLabel=${config.keyLabelFont}, candidate=${config.candidateFont}, comment=${config.commentFont}")
     }
@@ -135,17 +156,18 @@ object AppFonts {
 
     /**
      * 加载 FontFamily（用于 Compose Text）。
+     * 优先复用已解析的 [typeface]，避免同一字体文件被重复解析。
      * @return FontFamily 或 null（文件不存在或加载失败）
      */
-    private fun loadFontFamily(fontPath: String): FontFamily? {
+    private fun loadFontFamily(fontPath: String, typeface: Typeface?): FontFamily? {
         if (fontPath.isBlank()) return null
+        if (typeface != null) return FontFamily(typeface)
         val fontFile = resolveFontPath(fontPath)
         if (!fontFile.exists()) {
             return null
         }
         return try {
-            val typeface = Typeface.createFromFile(fontFile)
-            FontFamily(typeface)
+            FontFamily(Typeface.createFromFile(fontFile))
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load font family from ${fontFile.absolutePath}", e)
             null
