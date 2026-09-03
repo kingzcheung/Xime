@@ -236,7 +236,8 @@ fun HandwritingKeyboardLayout(
                 ) {
                     Text(text, color = keyTextColor, fontSize = 16.sp,
                         fontWeight = if (text.length <= 1) FontWeight.Normal else FontWeight.Medium,
-                        textAlign = TextAlign.Center)
+                        textAlign = TextAlign.Center,
+                        fontFamily = AppFonts.keyFontFamily)
                 }
             }
         }
@@ -268,7 +269,8 @@ fun HandwritingKeyboardLayout(
                 ) {
                     Text(text, color = txtColor, fontSize = 16.sp,
                         fontWeight = if (text.length <= 1) FontWeight.Normal else FontWeight.Medium,
-                        textAlign = TextAlign.Center)
+                        textAlign = TextAlign.Center,
+                        fontFamily = AppFonts.keyFontFamily)
                 }
             }
         }

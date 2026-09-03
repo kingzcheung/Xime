@@ -792,15 +792,16 @@ private fun ResetKey(
             modifier = Modifier.size(if (compactMode) 16.dp else 20.dp)
         )
         if (!compactMode) {
-            Text(
-                text = "重输",
-                color = textColor.copy(alpha = 0.5f),
-                fontSize = 9.sp,
-                fontWeight = FontWeight.Normal,
-                textAlign = TextAlign.Center,
-                maxLines = 1,
-                modifier = Modifier.offset(y = (-14).dp)
-            )
+Text(
+            text = "重输",
+            color = textColor.copy(alpha = 0.5f),
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Normal,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            modifier = Modifier.offset(y = (-14).dp),
+            fontFamily = AppFonts.keyFontFamily
+        )
         }
     }
 }
@@ -862,6 +863,7 @@ private fun StrokeSpaceButton(
             fontWeight = FontWeight.Normal,
             textAlign = TextAlign.Center,
             maxLines = 1,
+            fontFamily = AppFonts.keyFontFamily
         )
     }
 }

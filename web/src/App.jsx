@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import logo from './assets/logo.png'
 
-const ACCEPT = '.yaml,.zip,.tar.gz,.tgz,.gram,.jpg,.jpeg,.png,.xipk'
-const SUPPORTED = /\.(yaml|zip|tar\.gz|tgz|gram|jpe?g|png|xipk)$/i
+const ACCEPT = '.yaml,.zip,.tar.gz,.tgz,.gram,.jpg,.jpeg,.png,.xipk,.ttf,.otf,.woff,.woff2'
+const SUPPORTED = /\.(yaml|zip|tar\.gz|tgz|gram|jpe?g|png|xipk|ttf|otf|woff2?)$/i
 
 function supported(name) {
   return SUPPORTED.test(name)
@@ -53,6 +53,7 @@ function typeIcon(name, isDir) {
   if (lower.endsWith('.txt') || lower.endsWith('.md')) return '📝'
   if (lower.endsWith('.db')) return '🗄️'
   if (lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.webp')) return '🖼️'
+  if (lower.endsWith('.ttf') || lower.endsWith('.otf') || lower.endsWith('.woff') || lower.endsWith('.woff2')) return '🔤'
   return '📄'
 }
 
@@ -67,6 +68,7 @@ function typeBadge(name, isDir) {
   if (lower.endsWith('.yaml')) return '配置'
   if (lower.endsWith('.txt')) return '文本'
   if (lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.webp')) return '图片'
+  if (lower.endsWith('.ttf') || lower.endsWith('.otf') || lower.endsWith('.woff') || lower.endsWith('.woff2')) return '字体'
   if (lower.endsWith('.xipk')) return '插件'
   return '文件'
 }
@@ -272,7 +274,7 @@ export default function App() {
         >
           <div className="mb-3 text-4xl text-gray-400">📄</div>
           <div className="text-sm text-gray-400">拖拽文件到此处</div>
-          <div className="mt-2 text-xs text-gray-300">          支持 .yaml / .zip / .tar.gz / 插件(.xipk) / 图片(.jpg/.png)</div>
+          <div className="mt-2 text-xs text-gray-300">          支持 .yaml / .zip / .tar.gz / 插件(.xipk) / 图片(.jpg/.png) / 字体(.ttf/.otf)</div>
         </div>
 
         <input
@@ -311,6 +313,7 @@ export default function App() {
           <div>· 方案压缩包(.zip/.tar.gz) → market 目录</div>
           <div>· 配置文件(.yaml) → rime 目录</div>
           <div>· 图片(.jpg/.png) → themes 目录</div>
+          <div>· 字体(.ttf/.otf) → fonts 目录</div>
         </div>
 
         {summary && (

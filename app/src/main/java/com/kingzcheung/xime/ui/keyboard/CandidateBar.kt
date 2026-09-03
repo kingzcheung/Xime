@@ -130,6 +130,8 @@ fun CandidateBar(
     val inputTextLocation = SettingsPreferences.getInputTextLocation(context)
     val showInputBoxStyle = inputTextLocation == SettingsPreferences.INPUT_TEXT_INPUT_BOX
     val candidateTextSize = SettingsPreferences.getCandidateTextSize(context)
+    val candidateFontFamily = AppFonts.candidateFontFamily
+    val commentFontFamily = AppFonts.commentFontFamily
 
     val density = LocalDensity.current
     val textMeasurer = rememberTextMeasurer()
@@ -408,7 +410,9 @@ fun CandidateBar(
                         isSelected = index == 0,
                         accentColor = visuals.accentColor,
                         selectedTextColor = visuals.selectedTextColor,
-                        fontSize = candidateTextSize.sp
+                        fontSize = candidateTextSize.sp,
+                        candidateFontFamily = candidateFontFamily,
+                        commentFontFamily = commentFontFamily
                     )
                 }
 
@@ -439,7 +443,9 @@ fun CandidateBar(
                         isSelected = assocState?.highlightIndex == index,
                         accentColor = visuals.accentColor,
                         selectedTextColor = visuals.selectedTextColor,
-                        fontSize = candidateTextSize.sp
+                        fontSize = candidateTextSize.sp,
+                        candidateFontFamily = candidateFontFamily,
+                        commentFontFamily = commentFontFamily
                     )
                 }
             }
@@ -606,7 +612,9 @@ fun CandidateItem(
     accentColor: Color = Color(0xFF1A73E8),
     selectedTextColor: Color = Color(0xFF1A73E8),
     @SuppressLint("ModifierParameter") modifier: Modifier = Modifier,
-    fontSize: androidx.compose.ui.unit.TextUnit = 19.sp
+    fontSize: androidx.compose.ui.unit.TextUnit = 19.sp,
+    candidateFontFamily: androidx.compose.ui.text.font.FontFamily = androidx.compose.ui.text.font.FontFamily.Default,
+    commentFontFamily: androidx.compose.ui.text.font.FontFamily = androidx.compose.ui.text.font.FontFamily.Default,
 ) {
     Row(
         modifier = modifier
@@ -624,7 +632,8 @@ fun CandidateItem(
             color = if (isSelected) selectedTextColor else textColor,
             fontSize = fontSize,
             fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
-            maxLines = 1
+            maxLines = 1,
+            fontFamily = candidateFontFamily
         )
         if (comment.isNotEmpty()) {
             Spacer(modifier = Modifier.width(3.dp))
@@ -633,7 +642,8 @@ fun CandidateItem(
                 color = if (isSelected) selectedTextColor.copy(alpha = 0.6f) else textColor.copy(alpha = 0.5f),
                 fontSize = (fontSize.value * 11f / 19f).sp,
                 fontWeight = FontWeight.Normal,
-                maxLines = 1
+                maxLines = 1,
+                fontFamily = commentFontFamily
             )
         }
     }

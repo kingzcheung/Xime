@@ -1667,7 +1667,8 @@ fun SwipeableKeyButtonLandscape(
     val currentOnSwipeStateChange by rememberUpdatedState(onSwipeStateChange)
     val scope = rememberCoroutineScope()
     val view = LocalView.current
-    val chaiPuaFontFamily = AppFonts.chaiPuaFontFamily
+    val keyLabelFontFamily = AppFonts.keyLabelFontFamily
+    val keyFontFamily = AppFonts.keyFontFamily
 
     val density = LocalDensity.current
     val swipeUpThreshold = with(density) { (-15).dp.toPx() }
@@ -1931,7 +1932,8 @@ fun SwipeableKeyButtonLandscape(
                 fontWeight = FontWeight.Medium,
                 textAlign = TextAlign.Center,
                 maxLines = 1,
-                lineHeight = TextUnit.Unspecified
+                lineHeight = TextUnit.Unspecified,
+                fontFamily = keyFontFamily
             )
         }
 
@@ -1956,7 +1958,7 @@ fun SwipeableKeyButtonLandscape(
                 color = textColor.copy(alpha = 0.5f),
                 fontSize = effectiveSwipeFontSize.sp,
                 fontWeight = FontWeight.Normal,
-                fontFamily = chaiPuaFontFamily,
+                fontFamily = keyLabelFontFamily,
                 textAlign = TextAlign.Start,
                 maxLines = 1,
                 lineHeight = (8f * hintScale).sp,
@@ -2117,6 +2119,7 @@ private fun SplitSpaceKey(
     }
     val keyCornerRadius = LocalKeyCornerRadius.current
     val keyClipShape = remember(keyCornerRadius) { RoundedCornerShape(keyCornerRadius) }
+    val keyFontFamily = AppFonts.keyFontFamily
 
     Box(
         modifier = modifier
@@ -2138,7 +2141,8 @@ private fun SplitSpaceKey(
             fontSize = 14.sp,
             fontWeight = FontWeight.Normal,
             textAlign = TextAlign.Center,
-            maxLines = 1
+            maxLines = 1,
+            fontFamily = keyFontFamily
         )
 
         Text(
@@ -2150,7 +2154,8 @@ private fun SplitSpaceKey(
             maxLines = 1,
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(start = 6.dp, bottom = 2.dp)
+                .padding(start = 6.dp, bottom = 2.dp),
+            fontFamily = keyFontFamily
         )
     }
 }
@@ -2197,6 +2202,7 @@ private fun SpaceKey(
             }
         } else Modifier
     }
+    val keyFontFamily = AppFonts.keyFontFamily
 
     Box(
         modifier = modifier
@@ -2278,7 +2284,8 @@ private fun SpaceKey(
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Normal,
                     textAlign = TextAlign.Center,
-                    maxLines = 1
+                    maxLines = 1,
+                    fontFamily = keyFontFamily
                 )
 
                 if (isSttEnabled) {
@@ -2296,7 +2303,8 @@ private fun SpaceKey(
                         fontWeight = FontWeight.Normal,
                         textAlign = TextAlign.Start,
                         maxLines = 1,
-                        modifier = Modifier.align(Alignment.BottomStart).padding(start = 6.dp, bottom = 2.dp)
+                        modifier = Modifier.align(Alignment.BottomStart).padding(start = 6.dp, bottom = 2.dp),
+                        fontFamily = keyFontFamily
                     )
                 }
             }

@@ -390,6 +390,18 @@ keyboard:
   shadow:
     enabled: true
     elevation: 0.5
+
+  # ── 字体配置（可选，配置为空时使用系统默认字体）──
+  # 字体路径查找规则：
+  #   - 绝对路径（以 / 开头）：从根目录找起，如 /fonts/myfont.ttf
+  #   - 相对路径（包含 /）：相对于 rime/ 目录，如 fonts/myfont.ttf
+  #   - 仅文件名：相对于 rime/ 目录查找，如 myfont.ttf
+  fonts:
+    key_font: "rime/fonts/Xim-Sans-ShouXieTi-2.ttf"          # 按键主字字体
+    key_label_font: "rime/fonts/Xim-Sans-ShouXieTi-2.ttf"    # 字根/标签字体（默认使用 ChaiPUA）
+    candidate_font: "rime/fonts/Xim-Sans-ShouXieTi-2.ttf"     # 候选项字体
+    comment_font: "rime/fonts/Xim-Sans-ShouXieTi-2.ttf"       # 候选注释字体
+
   qwerty:
     # ── 按键布局模式 ──
     # standard: 默认布局（主文字居中，下滑提示在底部）

@@ -859,6 +859,17 @@ object SchemaManager {
         name.endsWith(".jpeg", ignoreCase = true) ||
         name.endsWith(".png", ignoreCase = true)
 
+    /** 判断文件名是否为字体文件（导入到 fonts/）。 */
+    fun isFont(name: String): Boolean =
+        name.endsWith(".ttf", ignoreCase = true) ||
+        name.endsWith(".otf", ignoreCase = true) ||
+        name.endsWith(".woff", ignoreCase = true) ||
+        name.endsWith(".woff2", ignoreCase = true)
+
+    /** fonts 目录：rime/fonts/，存放用户导入的自定义字体。 */
+    fun getFontsDir(context: Context): File =
+        File(getRimeDir(context), "fonts")
+
     /** themes 目录：rime/themes/，存放用户导入或自定义的背景图片。 */
     fun getThemesDir(context: Context): File =
         File(getRimeDir(context), "themes")
@@ -890,7 +901,22 @@ object SchemaManager {
         autoEnable: Boolean = true,
     ): ImportResult = withContext(Dispatchers.IO) {
         val name = sanitizeDisplayName(displayName)
-        if (isImage(name)) {
+        if (isFont(name)) {
+            // 字体文件：保存到 rime/fonts/，供自定义字体功能使用
+            val fontsDir = getFontsDir(context)
+            try {
+                fontsDir.mkdirs()
+                val target = File(fontsDir, name)
+                inputStream.use { input ->
+                    target.outputStream().use { output -> input.copyTo(output) }
+                }
+                FileLogger.i(TAG, "Imported $name -> rime/fonts/")
+                ImportResult(true)
+            } catch (e: Exception) {
+                FileLogger.e(TAG, "Failed to import font $name", e)
+                ImportResult(false)
+            }
+        } else if (isImage(name)) {
             // 图片：背景图等，保存到 rime/themes/，供主题使用
             val themesDir = getThemesDir(context)
             try {

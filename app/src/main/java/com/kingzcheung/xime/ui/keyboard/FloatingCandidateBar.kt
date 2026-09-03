@@ -93,7 +93,8 @@ fun FloatingCandidateBar(
                             Text(
                                 text = if (comment.isNotEmpty()) "$candidate  $comment" else candidate,
                                 fontSize = 13.sp,
-                                color = Color.White
+                                color = Color.White,
+                                fontFamily = AppFonts.candidateFontFamily
                             )
                         }
                     }

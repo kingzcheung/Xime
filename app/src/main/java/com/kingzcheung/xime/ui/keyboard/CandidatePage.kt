@@ -73,6 +73,8 @@ fun CandidatePage(
         MaterialTheme.colorScheme.primary,
         0.35f
     )
+    val candidateFontFamily = AppFonts.candidateFontFamily
+    val commentFontFamily = AppFonts.commentFontFamily
 
     val centerPage = 1
     val pagerState = rememberPagerState(initialPage = centerPage, pageCount = { 3 })
@@ -196,7 +198,9 @@ fun CandidatePage(
                                     text = candidate,
                                     comment = state.candidateComments.getOrElse(index) { "" },
                                     onClick = { callbacks.onCandidateSelect(index) },
-                                    textColor = state.textColor
+                                    textColor = state.textColor,
+                                    candidateFontFamily = candidateFontFamily,
+                                    commentFontFamily = commentFontFamily
                                 )
                             }
                         }
@@ -215,7 +219,9 @@ fun CandidatePage(
                                     text = candidate,
                                     comment = "",
                                     onClick = { callbacks.onAssociationSelect?.invoke(index) },
-                                    textColor = state.textColor
+                                    textColor = state.textColor,
+                                    candidateFontFamily = candidateFontFamily,
+                                    commentFontFamily = commentFontFamily
                                 )
                             }
                         }
@@ -241,7 +247,9 @@ fun CandidatePageItem(
     comment: String = "",
     onClick: () -> Unit,
     textColor: Color,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    candidateFontFamily: androidx.compose.ui.text.font.FontFamily = androidx.compose.ui.text.font.FontFamily.Default,
+    commentFontFamily: androidx.compose.ui.text.font.FontFamily = androidx.compose.ui.text.font.FontFamily.Default,
 ) {
     val displayComment = comment.replace("~", "")
 
@@ -260,7 +268,8 @@ fun CandidatePageItem(
             fontWeight = FontWeight.Normal,
             maxLines = 1,
             modifier = Modifier
-                .padding(horizontal = 2.dp)
+                .padding(horizontal = 2.dp),
+            fontFamily = candidateFontFamily
         )
         if (displayComment.isNotEmpty()) {
             Text(
@@ -270,7 +279,8 @@ fun CandidatePageItem(
                 fontWeight = FontWeight.Normal,
                 maxLines = 1,
                 modifier = Modifier
-                    .padding(horizontal = 1.dp)
+                    .padding(horizontal = 1.dp),
+                fontFamily = commentFontFamily
             )
         }
     }

@@ -426,6 +426,7 @@ private fun LandscapeCandidateItem(
                 fontWeight = FontWeight.Normal,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                fontFamily = AppFonts.candidateFontFamily
             )
             if (comment.isNotEmpty()) {
                 Text(
@@ -435,7 +436,8 @@ private fun LandscapeCandidateItem(
                     fontWeight = FontWeight.Normal,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(start = 2.dp)
+                    modifier = Modifier.padding(start = 2.dp),
+                    fontFamily = AppFonts.commentFontFamily
                 )
             }
         }
@@ -918,7 +920,8 @@ private fun CandidateItem(
                     fontSize = fontSize,
                     fontWeight = FontWeight.Medium,
                     textAlign = TextAlign.Center,
-                    maxLines = 1
+                    maxLines = 1,
+                    fontFamily = AppFonts.candidateFontFamily
                 )
             }
         } else {
@@ -928,7 +931,8 @@ private fun CandidateItem(
                 fontSize = fontSize,
                 fontWeight = FontWeight.Normal,
                 textAlign = TextAlign.Center,
-                maxLines = 1
+                maxLines = 1,
+                fontFamily = AppFonts.candidateFontFamily
             )
         }
     }
