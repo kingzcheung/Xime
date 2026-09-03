@@ -1,5 +1,6 @@
 package com.kingzcheung.xime.ui.keyboard
 
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Paint
 import android.graphics.Path
@@ -17,6 +18,7 @@ import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -135,16 +137,23 @@ fun rememberSwipeBubbleDrawData(
     if (!isLongPressMode && displayText.isNullOrEmpty()) return null
 
     val density = LocalDensity.current
-    val bodyHeightPx = with(density) { BubbleBodyHeight.toPx() }
+    val referenceHeightDp =
+        if (LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE) 44f else 56f
+    val contentScale = adaptiveKeyContentScale(
+        keyHeightDp = keyBounds.height / density.density,
+        referenceHeightDp = referenceHeightDp,
+    )
+    val bubbleScale = adaptiveBubbleScale(contentScale)
+    val bodyHeightPx = with(density) { BubbleBodyHeight.toPx() } * bubbleScale
     // 尖端完整覆盖按下的按键（与按键同高），宽体锚定按键顶部悬在上方（见 boxTop）。
     // 全部基于真实按键 bounds 计算，不再用 KeyHeight 估算值——
     // 键盘高度被调大时估算失准，宽体会下沉进按键被手指挡住。
     val pointerHeightPx = keyBounds.height
-    val cornerRadiusPx = with(density) { BubbleCornerRadius.toPx() }
+    val cornerRadiusPx = with(density) { BubbleCornerRadius.toPx() } * bubbleScale
     val screenMarginPx = with(density) { BubbleScreenMargin.toPx() }
     val keyWidthPx = keyWidth
     val minBodyWidthPx = keyWidthPx * 1.8f
-    val shadowRadiusPx = with(density) { 4.dp.toPx() }
+    val shadowRadiusPx = with(density) { 4.dp.toPx() } * bubbleScale
 
     val accentArgb = accentColor.toArgb()
     val isDarkTheme = keyTextColor == Color(0xFFE8EAED)
@@ -155,9 +164,9 @@ fun rememberSwipeBubbleDrawData(
 
     val chaiTypeface = AppFonts.chaiPuaTypeface
 
-    val textPaint = remember {
+    val textPaint = remember(bubbleScale) {
         Paint().apply {
-            textSize = with(density) { 16.sp.toPx() }
+            textSize = with(density) { 16.sp.toPx() } * bubbleScale
             isAntiAlias = true
         }
     }
@@ -169,13 +178,13 @@ fun rememberSwipeBubbleDrawData(
             maxOf(swipeState.longPressItems.size, 3)
         cellMin * keyWidthPx
     } else {
-        maxOf(textPaint.measureText(displayText!!) + with(density) { 20.dp.toPx() }, minBodyWidthPx)
+        maxOf(textPaint.measureText(displayText!!) + with(density) { 20.dp.toPx() } * bubbleScale, minBodyWidthPx)
     }
 
-    val textSizePx = with(density) { 16.sp.toPx() }
-    val selectedFontSizePx = with(density) { 20.sp.toPx() }
-    val normalFontSizePx = with(density) { 16.sp.toPx() }
-    val selectedBgRadiusPx = with(density) { 6.dp.toPx() }
+    val textSizePx = with(density) { 16.sp.toPx() } * bubbleScale
+    val selectedFontSizePx = with(density) { 20.sp.toPx() } * bubbleScale
+    val normalFontSizePx = with(density) { 16.sp.toPx() } * bubbleScale
+    val selectedBgRadiusPx = with(density) { 6.dp.toPx() } * bubbleScale
 
     val pointerCenterX = keyBounds.left + keyBounds.width / 2f
     val bodyLeft = (pointerCenterX - bodyWidth / 2f).coerceIn(
@@ -202,7 +211,7 @@ fun rememberSwipeBubbleDrawData(
     val pathBodyLeft = if (isLeftFlush && leftRoom <= cornerRadiusPx) pointerLeftInBox else bodyLeftInBox
     val pathBodyWidth = (if (isRightFlush && rightRoom <= cornerRadiusPx) pointerRightInBox else (bodyLeftInBox + bodyWidth)) - pathBodyLeft
 
-    val paddingPx = with(density) { 10.dp.toPx() }
+    val paddingPx = with(density) { 10.dp.toPx() } * bubbleScale
 
     val longPressIconBitmaps = remember(swipeState.longPressDrawableIds, textColor) {
         swipeState.longPressDrawableIds.mapNotNull { id ->
