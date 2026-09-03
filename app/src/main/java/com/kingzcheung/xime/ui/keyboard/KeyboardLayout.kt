@@ -249,7 +249,13 @@ fun KeyboardLayout(
 
     val isLandscape = !uiState.isFloatingMode && LocalConfiguration.current.screenWidthDp > LocalConfiguration.current.screenHeightDp
 
-    CompositionLocalProvider(LocalKeyCornerRadius provides kbKey.cornerRadius.dp) {
+    CompositionLocalProvider(
+        LocalKeyCornerRadius provides kbKey.cornerRadius.dp,
+        LocalKeyVisualPadding provides PaddingValues(
+            horizontal = kbKey.spacingFor("qwerty").first?.dp ?: 2.dp,
+            vertical = kbKey.spacingFor("qwerty").second?.dp ?: 4.25.dp,
+        ),
+    ) {
     Box(
         modifier = modifier
             .onGloballyPositioned { coordinates ->
@@ -399,7 +405,6 @@ fun KeyboardLayout(
                                 backgroundColor = specialKeyBackgroundColor,
                                 iconColor = specialKeyTextColor,
                                 modifier = Modifier
-                                    .padding(2.dp,4.dp)
                                     .weight(1.4f)
                                     .fillMaxHeight(),
                                 shadowEnabled = shadowEnabled,
@@ -515,7 +520,6 @@ fun KeyboardLayout(
                                 backgroundColor = specialKeyBackgroundColor,
                                 iconColor = specialKeyTextColor,
                                 modifier = Modifier
-                                    .padding(2.dp,0.dp)
                                     .weight(1.4f)
                                     .fillMaxHeight(),
                                 swipeText = "清空",
@@ -1110,6 +1114,7 @@ private fun ShiftCapsKeyButton(
                     isPressed = false
                 }
             }
+            .padding(LocalKeyVisualPadding.current)
             .then(shadowModifier)
             .clip(keyClipShape)
             .background(
@@ -1237,7 +1242,10 @@ private fun LandscapeKeyboardContent(
     }
 
     CompositionLocalProvider(
-        LocalKeyVisualPadding provides PaddingValues(horizontal = 1.dp, vertical = 2.dp)
+        LocalKeyVisualPadding provides PaddingValues(
+            horizontal = kbKey.spacingFor("qwerty").first?.dp ?: 2.dp,
+            vertical = kbKey.spacingFor("qwerty").second?.dp ?: 2.dp,
+        )
     ) {
         Row(
             modifier = Modifier
@@ -1343,7 +1351,7 @@ private fun LandscapeKeyboardContent(
                     onKeyPressDown = onKeyPressDown,
                     backgroundColor = specialKeyBackgroundColor,
                     iconColor = specialKeyTextColor,
-                    modifier = Modifier.padding(1.dp,2.dp).weight(1.2f),
+                    modifier = Modifier.weight(1.2f),
                         shadowEnabled = shadowEnabled,
                         shadowElevation = shadowElevation,
                         shadowShapeRadius = shadowShapeRadius,
@@ -1499,7 +1507,6 @@ private fun LandscapeKeyboardContent(
                     backgroundColor = specialKeyBackgroundColor,
                     iconColor = specialKeyTextColor,
                     modifier = Modifier
-                        .padding(1.dp)
                         .weight(1f)
                         .fillMaxHeight(),
                     onLongClick = { onKeyPress("delete") },

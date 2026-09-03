@@ -104,6 +104,8 @@ fun T9KeyboardLayout(
     shadowElevation: Dp = 1.dp,
     shadowShapeRadius: Dp = 8.dp,
     keyCornerRadius: Dp = 8.dp,
+    keySpacingX: Dp? = null,
+    keySpacingY: Dp? = null,
     modifier: Modifier = Modifier,
     onKeyPressDown: ((String) -> Unit)? = null,
     isFloatingMode: Boolean = false,
@@ -154,6 +156,8 @@ fun T9KeyboardLayout(
         onDelete = ::handleDelete,
         specialKeyTextColor = specialKeyTextColor,
         candidateState = candidateState,
+        keySpacingX = keySpacingX,
+        keySpacingY = keySpacingY,
     )
 }
 
@@ -183,6 +187,8 @@ private fun T9KeyboardSwipeOverlay(
     onDelete: () -> Unit,
     specialKeyTextColor: Color = Color.White,
     candidateState: State<CandidateState> = remember { mutableStateOf(CandidateState()) },
+    keySpacingX: Dp? = null,
+    keySpacingY: Dp? = null,
 ) {
     val swipeBubble = rememberSwipeBubbleController()
     var keyboardBounds by remember { mutableStateOf(Rect(0f, 0f, 0f, 0f)) }
@@ -258,7 +264,10 @@ private fun T9KeyboardSwipeOverlay(
                         .fillMaxHeight()
                 ) {
                     CompositionLocalProvider(
-                        LocalKeyVisualPadding provides PaddingValues(horizontal = 1.dp, vertical = 2.dp)
+                        LocalKeyVisualPadding provides PaddingValues(
+                            horizontal = keySpacingX ?: 2.dp,
+                            vertical = keySpacingY ?: 2.dp,
+                        )
                     ) {
                         T9KeyboardContent(
                         onKeyPress = onKeyPress,
@@ -283,7 +292,10 @@ private fun T9KeyboardSwipeOverlay(
             }
         } else {
             CompositionLocalProvider(
-                LocalKeyVisualPadding provides PaddingValues(horizontal = 2.dp, vertical = 2.dp)
+                LocalKeyVisualPadding provides PaddingValues(
+                    horizontal = keySpacingX ?: 2.dp,
+                    vertical = keySpacingY ?: 2.dp,
+                )
             ) {
                 Column(
                     modifier = Modifier

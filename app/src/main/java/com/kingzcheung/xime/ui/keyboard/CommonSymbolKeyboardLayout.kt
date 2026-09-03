@@ -74,6 +74,8 @@ fun CommonSymbolKeyboardLayout(
     shadowElevation: Dp = 1.dp,
     shadowShapeRadius: Dp = 8.dp,
     keyCornerRadius: Dp = 8.dp,
+    keySpacingX: Dp? = null,
+    keySpacingY: Dp? = null,
     modifier: Modifier = Modifier,
     onKeyPressDown: ((String) -> Unit)? = null,
     isFloatingMode: Boolean = false,
@@ -147,10 +149,15 @@ fun CommonSymbolKeyboardLayout(
                     localAsciiMode = !localAsciiMode
                     onKeyPress("ime_switch")
                 },
+                keySpacingX = keySpacingX,
+                keySpacingY = keySpacingY,
             )
         } else {
             CompositionLocalProvider(
-                LocalKeyVisualPadding provides PaddingValues(horizontal = 2.dp, vertical = 4.dp)
+                LocalKeyVisualPadding provides PaddingValues(
+                    horizontal = keySpacingX ?: 2.dp,
+                    vertical = keySpacingY ?: 4.dp,
+                )
             ) {
             Column(
                 modifier = Modifier
@@ -365,8 +372,13 @@ internal fun CommonSymbolLandscapeContent(
     specialKeyTextColor: Color = Color.White,
     isAsciiMode: Boolean = false,
     onToggleAsciiMode: (() -> Unit)? = null,
+    keySpacingX: Dp? = null,
+    keySpacingY: Dp? = null,
 ) {
-    val keyVisualPadding = PaddingValues(horizontal = 1.dp, vertical = 2.dp)
+    val keyVisualPadding = PaddingValues(
+        horizontal = keySpacingX ?: 2.dp,
+        vertical = keySpacingY ?: 2.dp,
+    )
 
     Row(
         modifier = Modifier

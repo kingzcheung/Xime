@@ -83,6 +83,8 @@ fun StrokeKeyboardLayout(
     shadowElevation: Dp = 1.dp,
     shadowShapeRadius: Dp = 8.dp,
     keyCornerRadius: Dp = 8.dp,
+    keySpacingX: Dp? = null,
+    keySpacingY: Dp? = null,
     modifier: Modifier = Modifier,
     onKeyPressDown: ((String) -> Unit)? = null,
     isFloatingMode: Boolean = false,
@@ -103,6 +105,8 @@ fun StrokeKeyboardLayout(
         shadowShapeRadius = shadowShapeRadius,
         onKeyPressDown = onKeyPressDown,
         specialKeyTextColor = specialKeyTextColor,
+        keySpacingX = keySpacingX,
+        keySpacingY = keySpacingY,
     )
 }
 
@@ -122,8 +126,10 @@ private fun StrokeKeyboardSwipeOverlay(
     shadowEnabled: Boolean,
     shadowElevation: Dp,
     shadowShapeRadius: Dp,
-    onKeyPressDown: ((String) -> Unit)?,
+onKeyPressDown: ((String) -> Unit)?,
     specialKeyTextColor: Color,
+    keySpacingX: Dp? = null,
+    keySpacingY: Dp? = null,
 ) {
     val configuration = LocalConfiguration.current
     val isLandscape = !isFloatingMode && configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
@@ -194,7 +200,10 @@ private fun StrokeKeyboardSwipeOverlay(
                     modifier = Modifier.weight(0.42f).fillMaxHeight(),
                 ) {
                     CompositionLocalProvider(
-                        LocalKeyVisualPadding provides PaddingValues(horizontal = 1.dp, vertical = 2.dp)
+                        LocalKeyVisualPadding provides PaddingValues(
+                            horizontal = keySpacingX ?: 2.dp,
+                            vertical = keySpacingY ?: 2.dp,
+                        )
                     ) {
                         StrokeKeyboardContent(
                             onKeyPress = onKeyPress,
@@ -214,7 +223,10 @@ private fun StrokeKeyboardSwipeOverlay(
             }
         } else {
             CompositionLocalProvider(
-                LocalKeyVisualPadding provides PaddingValues(horizontal = 2.dp, vertical = 2.dp)
+                LocalKeyVisualPadding provides PaddingValues(
+                    horizontal = keySpacingX ?: 2.dp,
+                    vertical = keySpacingY ?: 2.dp,
+                )
             ) {
                 Row(
                     modifier = Modifier
