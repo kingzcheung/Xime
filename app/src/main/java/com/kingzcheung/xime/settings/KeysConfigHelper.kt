@@ -96,11 +96,36 @@ data class KeyboardShadowConfig(
 )
 
 /**
+ * 单个键盘的间距覆盖配置。
+ */
+data class KeyboardSpacingConfig(
+    val spacingX: Float? = null,
+    val spacingY: Float? = null,
+)
+
+/**
  * 键盘按键配置，从 xime.yaml keyboard.key 加载。
  */
 data class KeyboardKeyConfig(
     val cornerRadius: Int = 8,
-)
+    /** 按键横向间距（dp），未配置时各布局使用自身默认值 */
+    val spacingX: Float? = null,
+    /** 按键竖向间距（dp），未配置时各布局使用自身默认值 */
+    val spacingY: Float? = null,
+    /** 各键盘单独覆盖的间距，key 为键盘名（qwerty/t9/number/stroke/symbol） */
+    val spacingOverrides: Map<String, KeyboardSpacingConfig> = emptyMap(),
+) {
+    /**
+     * 获取指定键盘的有效间距（覆盖值优先，回退全局值）。
+     * @return Pair(横向, 竖向)，null 表示未配置
+     */
+    fun spacingFor(keyboard: String): Pair<Float?, Float?> {
+        val override = spacingOverrides[keyboard]
+        val sx = override?.spacingX ?: spacingX
+        val sy = override?.spacingY ?: spacingY
+        return sx to sy
+    }
+}
 
 /**
  * 键盘颜色配置，从 xime.yaml keyboard.colors 加载。
@@ -688,18 +713,41 @@ object KeysConfigHelper {
 
     /** 从 YAML 文本中提取 keyboard.key 段。
      *  兼容旧版：若 key.corner_radius 未设置，回退读取 shadow.shape_radius。 */
-    private fun parseKeyboardKeyYamlText(yamlText: String): KeyboardKeyConfig? {
+    internal fun parseKeyboardKeyYamlText(yamlText: String): KeyboardKeyConfig? {
         val root = yaml.parseToYamlNode(yamlText) as? YamlMap ?: return null
         val keyboardNode = root["keyboard"] as? YamlMap ?: return null
         var cornerRadius = 8
+        var spacingX: Float? = null
+        var spacingY: Float? = null
+        val spacingOverrides = mutableMapOf<String, KeyboardSpacingConfig>()
         // 优先读取 key.corner_radius
         val keyNode = keyboardNode["key"] as? YamlMap
         if (keyNode != null) {
             for ((kNode, vNode) in keyNode.entries) {
                 val key = (kNode as? YamlScalar)?.content ?: continue
-                val value = (vNode as? YamlScalar)?.content ?: continue
                 if (key == "corner_radius") {
+                    val value = (vNode as? YamlScalar)?.content ?: continue
                     cornerRadius = value.toIntOrNull() ?: 8
+                } else if (key == "spacing_x") {
+                    val value = (vNode as? YamlScalar)?.content ?: continue
+                    spacingX = value.toFloatOrNull()
+                } else if (key == "spacing_y") {
+                    val value = (vNode as? YamlScalar)?.content ?: continue
+                    spacingY = value.toFloatOrNull()
+                } else if (vNode is YamlMap) {
+                    // 键盘级间距覆盖：keyboard.key.<键盘名>.spacing_x/spacing_y
+                    var overrideX: Float? = null
+                    var overrideY: Float? = null
+                    for ((skNode, svNode) in vNode.entries) {
+                        val skey = (skNode as? YamlScalar)?.content ?: continue
+                        val svalue = (svNode as? YamlScalar)?.content ?: continue
+                        if (skey == "spacing_x") {
+                            overrideX = svalue.toFloatOrNull()
+                        } else if (skey == "spacing_y") {
+                            overrideY = svalue.toFloatOrNull()
+                        }
+                    }
+                    spacingOverrides[key] = KeyboardSpacingConfig(overrideX, overrideY)
                 }
             }
         }
@@ -716,7 +764,12 @@ object KeysConfigHelper {
                 }
             }
         }
-        return KeyboardKeyConfig(cornerRadius = cornerRadius)
+        return KeyboardKeyConfig(
+            cornerRadius = cornerRadius,
+            spacingX = spacingX,
+            spacingY = spacingY,
+            spacingOverrides = spacingOverrides,
+        )
     }
 
     /** 从 xime.yaml + xime.custom.yaml 合并解析字体配置。 */

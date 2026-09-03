@@ -65,6 +65,8 @@ fun NumberKeyboardLayout(
     shadowElevation: Dp = 1.dp,
     shadowShapeRadius: Dp = 8.dp,
     keyCornerRadius: Dp = 8.dp,
+    keySpacingX: Dp? = null,
+    keySpacingY: Dp? = null,
     modifier: Modifier = Modifier,
     onKeyPressDown: ((String) -> Unit)? = null,
     isFloatingMode: Boolean = false,
@@ -133,7 +135,10 @@ fun NumberKeyboardLayout(
                         .fillMaxHeight(),
                 ) {
                     CompositionLocalProvider(
-                        LocalKeyVisualPadding provides PaddingValues(horizontal = 1.dp, vertical = 2.dp)
+                        LocalKeyVisualPadding provides PaddingValues(
+                            horizontal = keySpacingX ?: 2.dp,
+                            vertical = keySpacingY ?: 2.dp,
+                        )
                     ) {
                     commonSymbols.chunked(6).forEach { rowSymbols ->
                         Row(
@@ -172,7 +177,10 @@ fun NumberKeyboardLayout(
                         .fillMaxHeight()
                 ) {
                     CompositionLocalProvider(
-                        LocalKeyVisualPadding provides PaddingValues(horizontal = 1.dp, vertical = 2.dp)
+                        LocalKeyVisualPadding provides PaddingValues(
+                            horizontal = keySpacingX ?: 2.dp,
+                            vertical = keySpacingY ?: 2.dp,
+                        )
                     ) {
                     NumberRows(
                         onKeyPress = onKeyPress,
@@ -193,7 +201,10 @@ fun NumberKeyboardLayout(
         } else {
             // 竖屏：原有布局
             CompositionLocalProvider(
-                LocalKeyVisualPadding provides PaddingValues(horizontal = 2.dp, vertical = 2.dp)
+                LocalKeyVisualPadding provides PaddingValues(
+                    horizontal = keySpacingX ?: 2.dp,
+                    vertical = keySpacingY ?: 2.dp,
+                )
             ) {
             Column(
                 modifier = Modifier
