@@ -287,13 +287,9 @@ internal class ImeSchemaController(private val service: XimeInputMethodService) 
             service.previousSchemaId = service.rimeEngine.getCurrentSchema()
             SettingsPreferences.setCurrentSchema(service, schemaId)
             service.keyboardViewModel.switchMain(com.kingzcheung.xime.keyboard.MainType.HANDWRITING)
-            // 手写方案：模型文件已确认存在，后台加载引擎
-            Thread {
-                try {
-                    com.kingzcheung.xime.handwriting.HandwritingEngine.initialize(service)
-                } catch (_: Exception) {
-                }
-            }.start()
+            // 手写模型按"用键盘时加载"管理：切到手写方案即展示手写键盘，
+            // 由 HandwritingKeyboardLayout 创建时（LaunchedEffect）负责加载，
+            // 此处不重复加载（避免与布局初始化并发双 bind/load）
             service.sessionController.updateSchemaName()
             return
         }

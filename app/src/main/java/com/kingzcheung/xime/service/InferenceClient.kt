@@ -7,6 +7,7 @@ import android.content.ServiceConnection
 import android.os.DeadObjectException
 import android.os.IBinder
 import com.kingzcheung.xime.association.AssociationCandidate
+import com.kingzcheung.xime.handwriting.HandwritingCandidate
 import com.kingzcheung.xime.util.FileLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -24,6 +25,11 @@ class InferenceClient(private val context: Context) {
     private var service: IInferenceService? = null
     private var bound = false
 
+    /** 服务进程死亡/绑定失效时通知宿主：宿主据此重置本地"已加载"假象实现自愈
+     *  （AUTO_CREATE 会自动重启服务，但新进程里模型是空的，客户端标志必须跟着复位）。 */
+    @Volatile
+    var onDisconnected: (() -> Unit)? = null
+
     @Volatile
     private var connectLatch = CountDownLatch(1)
 
@@ -38,6 +44,7 @@ class InferenceClient(private val context: Context) {
         override fun onServiceDisconnected(name: ComponentName) {
             service = null
             bound = false
+            onDisconnected?.invoke()
             FileLogger.w(TAG, "InferenceService disconnected (crash?)")
         }
 
@@ -45,6 +52,7 @@ class InferenceClient(private val context: Context) {
             service = null
             bound = false
             connectLatch.countDown()
+            onDisconnected?.invoke()
             FileLogger.e(TAG, "InferenceService binding died")
         }
     }
@@ -131,6 +139,28 @@ class InferenceClient(private val context: Context) {
             emptyList()
         } catch (e: Exception) {
             FileLogger.e(TAG, "predict failed", e)
+            emptyList()
+        }
+    }
+
+    /** 手写识别：客户端传原始笔画，服务端完成预处理与汉字映射，直接返回候选字。 */
+    suspend fun recognizeHandwriting(points: FloatArray, strokePointCounts: IntArray, topK: Int): List<HandwritingCandidate> = withContext(Dispatchers.IO) {
+        try {
+            val result = requireService().recognizeHandwriting(MODEL_HANDWRITING, points, strokePointCounts, topK)
+            val candidates = mutableListOf<HandwritingCandidate>()
+            for (i in result.indices step 2) {
+                val ch = result.getOrNull(i) ?: continue
+                val score = result.getOrNull(i + 1)?.toFloatOrNull() ?: continue
+                candidates.add(HandwritingCandidate(ch, score))
+            }
+            candidates
+        } catch (e: DeadObjectException) {
+            // 服务进程被回收：重置绑定状态，让上层（HandwritingEngine）感知失联并自愈
+            invalidateBinding()
+            FileLogger.e(TAG, "recognizeHandwriting failed: service died", e)
+            emptyList()
+        } catch (e: Exception) {
+            FileLogger.e(TAG, "recognizeHandwriting failed", e)
             emptyList()
         }
     }

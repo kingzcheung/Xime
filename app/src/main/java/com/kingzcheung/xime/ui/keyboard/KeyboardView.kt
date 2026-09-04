@@ -759,6 +759,8 @@ fun KeyboardView(
                                     "symbol" -> viewModel.enterPanel(PanelType.COMMON_SYMBOL)
                                     "number" -> viewModel.enterPanel(PanelType.NUMBER)
                                     "ime_switch" -> {
+                                        // 离开手写页即卸载手写模型（回到手写页时布局重建重载）
+                                        com.kingzcheung.xime.handwriting.HandwritingEngine.release()
                                         viewModel.switchMain(MainType.FULL)
                                         callbacks.onKeyPress("ime_switch", false)
                                     }

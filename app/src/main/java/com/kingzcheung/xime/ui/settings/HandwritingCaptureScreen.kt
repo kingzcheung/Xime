@@ -226,7 +226,7 @@ class HandwritingCaptureViewModel(app: android.app.Application) : AndroidViewMod
  * 粘贴一段文本 → 点击目标字 → 内嵌画布书写 → 识别预览人工确认 → 自动跳下一个未采字 → JSON 导出。
  *
  * 坐标语义与键盘手写一致：作画区局部像素坐标（左上原点，y 向下），模型侧按笔迹
- * bounding box 归一化（HandwritingEngine.strokesToSequence），画布尺寸不影响分布。
+ * bounding box 归一化（HandwritingInference.strokesToSequence），画布尺寸不影响分布。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

@@ -6,7 +6,7 @@ package com.kingzcheung.xime.handwriting.capture
  * 坐标语义与键盘手写（HandwritingKeyboardLayout）一致：
  * - x/y 为作画区局部像素坐标（左上角原点，y 向下），未做任何归一化；
  * - 时间为相对本次样本首笔起点的毫秒数（首笔起点 = 0）。
- * 归一化由训练侧复刻推理侧 HandwritingEngine.strokesToSequence 的
+ * 归一化由训练侧复刻推理侧 HandwritingInference.strokesToSequence 的
  * bounding-box 算法完成，采集端只存原材料。
  */
 data class HandwritingSample(
