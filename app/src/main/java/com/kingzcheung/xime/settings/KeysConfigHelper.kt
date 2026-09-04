@@ -407,6 +407,59 @@ data class KeyboardFontConfig(
     val commentFont: String = "",
 )
 
+/**
+ * 部分配置：仅包含 YAML 中显式配置的字段，null = 未配置。
+ * 用于 custom → builtIn → 代码默认值的字段级一路 fallback 合并。
+ */
+internal data class KeyboardFontPartial(
+    val keyFont: String? = null,
+    val keyLabelFont: String? = null,
+    val candidateFont: String? = null,
+    val commentFont: String? = null,
+)
+
+internal data class KeyboardColorsPartial(
+    val keyBgColor: Long? = null,
+    val keyBgColorDark: Long? = null,
+    val specialKeyBgColor: Long? = null,
+    val specialKeyBgColorDark: Long? = null,
+    val keyTextColor: Long? = null,
+    val keyTextColorDark: Long? = null,
+    val candidateTextColor: Long? = null,
+    val candidateTextColorDark: Long? = null,
+)
+
+internal data class KeyboardShadowPartial(
+    val enabled: Boolean? = null,
+    val elevation: Int? = null,
+    val shapeRadius: Int? = null,
+)
+
+internal data class KeyboardKeyPartial(
+    val cornerRadius: Int? = null,
+    val spacingX: Float? = null,
+    val spacingY: Float? = null,
+    val spacingOverrides: Map<String, KeyboardSpacingConfig>? = null,
+)
+
+/** 字段级一路 fallback：custom → builtIn → 代码默认值。 */
+internal inline fun <T> tiered(custom: T?, builtIn: T?, default: T): T = custom ?: builtIn ?: default
+
+/** 字符串字段的 fallback：空白视为未配置，路由到下一级。 */
+internal fun tieredText(custom: String?, builtIn: String?, default: String): String =
+    custom?.takeIf { it.isNotBlank() }
+        ?: builtIn?.takeIf { it.isNotBlank() }
+        ?: default
+
+/**
+ * kaml 0.104 的 [YamlMap.get] 是 reified 泛型取值，值类型与期望类型不符时抛
+ * IncorrectTypeException（如 `fonts:` 段整体被注释时值为 YamlNull，`["fonts"] as? YamlMap`
+ * 会在 get 内部直接抛异常，`as?` 无机会返回 null）。
+ * 统一经 YamlNode 取值后再做真正的安全转换：段缺失/为 null/类型不符时返回 null 而非抛异常。
+ */
+private inline fun <reified T : YamlNode> YamlMap.opt(key: String): T? =
+    get<YamlNode>(key) as? T
+
 @Serializable
 data class StyleConfig(
     @SerialName("color_scheme")
@@ -618,196 +671,278 @@ object KeysConfigHelper {
         return Pair(zh, en)
     }
 
-    /** 从 xime.yaml + xime.custom.yaml 合并解析键盘颜色配置。 */
+    /** 从 xime.yaml + xime.custom.yaml 合并解析键盘颜色配置（字段级一路 fallback）。 */
     private fun parseKeyboardColorsFromAssets(context: Context): KeyboardColorsConfig {
-        val defaultText = readAssetText(context, XIME_CONFIG_FILE) ?: return KeyboardColorsConfig()
-        val default = parseKeyboardColorsYamlText(defaultText) ?: return KeyboardColorsConfig()
-        val custom = readUserDataText(context, XIME_CUSTOM_CONFIG_FILE)
+        val builtIn = readAssetText(context, XIME_CONFIG_FILE)
             ?.let { parseKeyboardColorsYamlText(it) }
-            ?: readAssetText(context, XIME_CUSTOM_CONFIG_FILE)
-                ?.let { parseKeyboardColorsYamlText(it) }
-        return custom ?: default
+        val custom = readCustomText(context)?.let { parseKeyboardColorsYamlText(it) }
+        return mergeColorsConfigs(custom, builtIn)
     }
 
-    /** 从 YAML 文本中提取 keyboard.colors 段。 */
-    private fun parseKeyboardColorsYamlText(yamlText: String): KeyboardColorsConfig? {
-        val root = yaml.parseToYamlNode(yamlText) as? YamlMap ?: return null
-        val keyboardNode = root["keyboard"] as? YamlMap ?: return null
-        val colorsNode = keyboardNode["colors"] as? YamlMap ?: return null
-        var kBg = 0xFFFFFFL
-        var kBgDark = 0x4A4A4AL
-        var spKeyBg: Long? = null
-        var spKeyBgDark: Long? = null
-        var kTxt = 0x202124L
-        var kTxtDark = 0xE8EAEDL
-        var candTxt = 0x8AB4F8L
-        var candTxtDark = 0x8AB4F8L
-        for ((kNode, vNode) in colorsNode.entries) {
-            val key = (kNode as? YamlScalar)?.content ?: continue
-            val value = (vNode as? YamlScalar)?.content ?: continue
-            val hex = value.removePrefix("0x").toLongOrNull(16) ?: continue
-            when (key) {
-                "key_bg_color" -> kBg = hex
-                "key_bg_color_dark" -> kBgDark = hex
-                "special_key_bg_color" -> spKeyBg = hex
-                "special_key_bg_color_dark" -> spKeyBgDark = hex
-                "key_text_color" -> kTxt = hex
-                "key_text_color_dark" -> kTxtDark = hex
-                "candidate_text_color" -> candTxt = hex
-                "candidate_text_color_dark" -> candTxtDark = hex
+    /** 字段级一路 fallback 合并颜色配置：custom → builtIn → 代码默认值。 */
+    internal fun mergeColorsConfigs(custom: KeyboardColorsPartial?, builtIn: KeyboardColorsPartial?): KeyboardColorsConfig =
+        KeyboardColorsConfig(
+            keyBgColor = tiered(custom?.keyBgColor, builtIn?.keyBgColor, 0xFFFFFF),
+            keyBgColorDark = tiered(custom?.keyBgColorDark, builtIn?.keyBgColorDark, 0x4A4A4A),
+            specialKeyBgColor = tiered(custom?.specialKeyBgColor, builtIn?.specialKeyBgColor, null),
+            specialKeyBgColorDark = tiered(custom?.specialKeyBgColorDark, builtIn?.specialKeyBgColorDark, null),
+            keyTextColor = tiered(custom?.keyTextColor, builtIn?.keyTextColor, 0x202124),
+            keyTextColorDark = tiered(custom?.keyTextColorDark, builtIn?.keyTextColorDark, 0xE8EAED),
+            candidateTextColor = tiered(custom?.candidateTextColor, builtIn?.candidateTextColor, 0x1A73E8),
+            candidateTextColorDark = tiered(custom?.candidateTextColorDark, builtIn?.candidateTextColorDark, 0x8AB4F8),
+        )
+
+    /** 从 YAML 文本中提取 keyboard.colors 段（仅显式字段非 null）。 */
+    internal fun parseKeyboardColorsYamlText(yamlText: String): KeyboardColorsPartial? {
+        return try {
+            val root = yaml.parseToYamlNode(yamlText) as? YamlMap ?: return null
+            val keyboardNode = root.opt<YamlMap>("keyboard") ?: return null
+            val colorsNode = keyboardNode.opt<YamlMap>("colors") ?: return null
+            var kBg: Long? = null
+            var kBgDark: Long? = null
+            var spKeyBg: Long? = null
+            var spKeyBgDark: Long? = null
+            var kTxt: Long? = null
+            var kTxtDark: Long? = null
+            var candTxt: Long? = null
+            var candTxtDark: Long? = null
+            for ((kNode, vNode) in colorsNode.entries) {
+                val key = (kNode as? YamlScalar)?.content ?: continue
+                val value = (vNode as? YamlScalar)?.content ?: continue
+                val hex = value.removePrefix("0x").toLongOrNull(16) ?: continue
+                when (key) {
+                    "key_bg_color" -> kBg = hex
+                    "key_bg_color_dark" -> kBgDark = hex
+                    "special_key_bg_color" -> spKeyBg = hex
+                    "special_key_bg_color_dark" -> spKeyBgDark = hex
+                    "key_text_color" -> kTxt = hex
+                    "key_text_color_dark" -> kTxtDark = hex
+                    "candidate_text_color" -> candTxt = hex
+                    "candidate_text_color_dark" -> candTxtDark = hex
+                }
+            }
+            KeyboardColorsPartial(
+                keyBgColor = kBg,
+                keyBgColorDark = kBgDark,
+                specialKeyBgColor = spKeyBg,
+                specialKeyBgColorDark = spKeyBgDark,
+                keyTextColor = kTxt,
+                keyTextColorDark = kTxtDark,
+                candidateTextColor = candTxt,
+                candidateTextColorDark = candTxtDark,
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to parse keyboard colors config", e)
+            null
+        }
+    }
+
+    /** 从 xime.yaml + xime.custom.yaml 合并解析键盘阴影配置（字段级一路 fallback）。 */
+    private fun parseKeyboardShadowFromAssets(context: Context): KeyboardShadowConfig {
+        val builtIn = readAssetText(context, XIME_CONFIG_FILE)
+            ?.let { parseKeyboardShadowYamlText(it) }
+        val custom = readCustomText(context)?.let { parseKeyboardShadowYamlText(it) }
+        return mergeShadowConfigs(custom, builtIn)
+    }
+
+    /** 字段级一路 fallback 合并阴影配置：custom → builtIn → 代码默认值。 */
+    internal fun mergeShadowConfigs(custom: KeyboardShadowPartial?, builtIn: KeyboardShadowPartial?): KeyboardShadowConfig =
+        KeyboardShadowConfig(
+            enabled = tiered(custom?.enabled, builtIn?.enabled, true),
+            elevation = tiered(custom?.elevation, builtIn?.elevation, 1),
+            shapeRadius = tiered(custom?.shapeRadius, builtIn?.shapeRadius, 8),
+        )
+
+    /** 从 YAML 文本中提取 keyboard.shadow 段（仅显式字段非 null）。 */
+    internal fun parseKeyboardShadowYamlText(yamlText: String): KeyboardShadowPartial? {
+        return try {
+            val root = yaml.parseToYamlNode(yamlText) as? YamlMap ?: return null
+            val keyboardNode = root.opt<YamlMap>("keyboard") ?: return null
+            val shadowNode = keyboardNode.opt<YamlMap>("shadow") ?: return null
+            var enabled: Boolean? = null
+            var elevation: Int? = null
+            var shapeRadius: Int? = null
+            for ((kNode, vNode) in shadowNode.entries) {
+                val key = (kNode as? YamlScalar)?.content ?: continue
+                val value = (vNode as? YamlScalar)?.content ?: continue
+                when (key) {
+                    "enabled" -> enabled = value.toBooleanStrictOrNull() ?: continue
+                    "elevation" -> elevation = value.toIntOrNull() ?: continue
+                    "shape_radius" -> shapeRadius = value.toIntOrNull() ?: continue
+                }
+            }
+            KeyboardShadowPartial(enabled = enabled, elevation = elevation, shapeRadius = shapeRadius)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to parse keyboard shadow config", e)
+            null
+        }
+    }
+
+    /** 从 xime.yaml + xime.custom.yaml 合并解析键盘按键配置（字段级一路 fallback）。 */
+    private fun parseKeyboardKeyFromAssets(context: Context): KeyboardKeyConfig {
+        val builtIn = readAssetText(context, XIME_CONFIG_FILE)
+            ?.let { parseKeyboardKeyYamlPartial(it) }
+        val custom = readCustomText(context)?.let { parseKeyboardKeyYamlPartial(it) }
+        return mergeKeyConfigs(custom, builtIn)
+    }
+
+    /** 字段级一路 fallback 合并按键配置：custom → builtIn → 代码默认值。 */
+    internal fun mergeKeyConfigs(custom: KeyboardKeyPartial?, builtIn: KeyboardKeyPartial?): KeyboardKeyConfig =
+        KeyboardKeyConfig(
+            cornerRadius = tiered(custom?.cornerRadius, builtIn?.cornerRadius, 8),
+            spacingX = tiered(custom?.spacingX, builtIn?.spacingX, null),
+            spacingY = tiered(custom?.spacingY, builtIn?.spacingY, null),
+            spacingOverrides = mergeSpacingOverrides(custom?.spacingOverrides, builtIn?.spacingOverrides),
+        )
+
+    /** 按键盘名合并间距覆盖：同名项字段级 fallback（custom 非空字段覆盖 builtIn）。 */
+    internal fun mergeSpacingOverrides(
+        custom: Map<String, KeyboardSpacingConfig>?,
+        builtIn: Map<String, KeyboardSpacingConfig>?,
+    ): Map<String, KeyboardSpacingConfig> {
+        if (custom == null) return builtIn ?: emptyMap()
+        if (builtIn == null) return custom
+        val result = LinkedHashMap<String, KeyboardSpacingConfig>(custom)
+        for ((key, builtInValue) in builtIn) {
+            val customValue = result[key]
+            result[key] = if (customValue == null) {
+                builtInValue
+            } else {
+                KeyboardSpacingConfig(
+                    spacingX = customValue.spacingX ?: builtInValue.spacingX,
+                    spacingY = customValue.spacingY ?: builtInValue.spacingY,
+                )
             }
         }
-        return KeyboardColorsConfig(
-            keyBgColor = kBg,
-            keyBgColorDark = kBgDark,
-            specialKeyBgColor = spKeyBg,
-            specialKeyBgColorDark = spKeyBgDark,
-            keyTextColor = kTxt,
-            keyTextColorDark = kTxtDark,
-            candidateTextColor = candTxt,
-            candidateTextColorDark = candTxtDark,
+        return result
+    }
+
+    /**
+     * 兼容测试入口：从 YAML 文本中提取 keyboard.key 段并填充代码默认值。
+     * > 合并（custom → builtIn → 默认）请使用 [parseKeyboardKeyYamlPartial]。
+     */
+    internal fun parseKeyboardKeyYamlText(yamlText: String): KeyboardKeyConfig? {
+        val partial = parseKeyboardKeyYamlPartial(yamlText) ?: return null
+        return KeyboardKeyConfig(
+            cornerRadius = partial.cornerRadius ?: 8,
+            spacingX = partial.spacingX,
+            spacingY = partial.spacingY,
+            spacingOverrides = partial.spacingOverrides ?: emptyMap(),
         )
     }
 
-    /** 从 xime.yaml + xime.custom.yaml 合并解析键盘阴影配置。 */
-    private fun parseKeyboardShadowFromAssets(context: Context): KeyboardShadowConfig {
-        val defaultText = readAssetText(context, XIME_CONFIG_FILE) ?: return KeyboardShadowConfig()
-        val default = parseKeyboardShadowYamlText(defaultText) ?: return KeyboardShadowConfig()
-        val custom = readUserDataText(context, XIME_CUSTOM_CONFIG_FILE)
-            ?.let { parseKeyboardShadowYamlText(it) }
-            ?: readAssetText(context, XIME_CUSTOM_CONFIG_FILE)
-                ?.let { parseKeyboardShadowYamlText(it) }
-        return custom ?: default
-    }
-
-    /** 从 YAML 文本中提取 keyboard.shadow 段。 */
-    private fun parseKeyboardShadowYamlText(yamlText: String): KeyboardShadowConfig? {
-        val root = yaml.parseToYamlNode(yamlText) as? YamlMap ?: return null
-        val keyboardNode = root["keyboard"] as? YamlMap ?: return null
-        val shadowNode = keyboardNode["shadow"] as? YamlMap ?: return null
-        var enabled = true
-        var elevation = 1
-        var shapeRadius = 8
-        for ((kNode, vNode) in shadowNode.entries) {
-            val key = (kNode as? YamlScalar)?.content ?: continue
-            val value = (vNode as? YamlScalar)?.content ?: continue
-            when (key) {
-                "enabled" -> enabled = value.toBooleanStrictOrNull() ?: true
-                "elevation" -> elevation = value.toIntOrNull() ?: 1
-                "shape_radius" -> shapeRadius = value.toIntOrNull() ?: 8
+    /** 从 YAML 文本中提取 keyboard.key 段（仅显式字段非 null）。 */
+    private fun parseKeyboardKeyYamlPartial(yamlText: String): KeyboardKeyPartial? {
+        return try {
+            val root = yaml.parseToYamlNode(yamlText) as? YamlMap ?: return null
+            val keyboardNode = root.opt<YamlMap>("keyboard") ?: return null
+            var cornerRadius: Int? = null
+            var spacingX: Float? = null
+            var spacingY: Float? = null
+            val spacingOverrides = mutableMapOf<String, KeyboardSpacingConfig>()
+            // 优先读取 key.corner_radius
+            val keyNode = keyboardNode.opt<YamlMap>("key")
+            if (keyNode != null) {
+                for ((kNode, vNode) in keyNode.entries) {
+                    val key = (kNode as? YamlScalar)?.content ?: continue
+                    if (key == "corner_radius") {
+                        val value = (vNode as? YamlScalar)?.content ?: continue
+                        cornerRadius = value.toIntOrNull()
+                    } else if (key == "spacing_x") {
+                        val value = (vNode as? YamlScalar)?.content ?: continue
+                        spacingX = value.toFloatOrNull()
+                    } else if (key == "spacing_y") {
+                        val value = (vNode as? YamlScalar)?.content ?: continue
+                        spacingY = value.toFloatOrNull()
+                    } else if (vNode is YamlMap) {
+                        // 键盘级间距覆盖：keyboard.key.<键盘名>.spacing_x/spacing_y
+                        var overrideX: Float? = null
+                        var overrideY: Float? = null
+                        for ((skNode, svNode) in vNode.entries) {
+                            val skey = (skNode as? YamlScalar)?.content ?: continue
+                            val svalue = (svNode as? YamlScalar)?.content ?: continue
+                            if (skey == "spacing_x") {
+                                overrideX = svalue.toFloatOrNull()
+                            } else if (skey == "spacing_y") {
+                                overrideY = svalue.toFloatOrNull()
+                            }
+                        }
+                        spacingOverrides[key] = KeyboardSpacingConfig(overrideX, overrideY)
+                    }
+                }
             }
-        }
-        return KeyboardShadowConfig(enabled = enabled, elevation = elevation, shapeRadius = shapeRadius)
-    }
-
-    /** 从 xime.yaml + xime.custom.yaml 合并解析键盘按键配置。 */
-    private fun parseKeyboardKeyFromAssets(context: Context): KeyboardKeyConfig {
-        val defaultText = readAssetText(context, XIME_CONFIG_FILE) ?: return KeyboardKeyConfig()
-        val default = parseKeyboardKeyYamlText(defaultText) ?: return KeyboardKeyConfig()
-        val custom = readUserDataText(context, XIME_CUSTOM_CONFIG_FILE)
-            ?.let { parseKeyboardKeyYamlText(it) }
-            ?: readAssetText(context, XIME_CUSTOM_CONFIG_FILE)
-                ?.let { parseKeyboardKeyYamlText(it) }
-        return custom ?: default
-    }
-
-    /** 从 YAML 文本中提取 keyboard.key 段。
-     *  兼容旧版：若 key.corner_radius 未设置，回退读取 shadow.shape_radius。 */
-    internal fun parseKeyboardKeyYamlText(yamlText: String): KeyboardKeyConfig? {
-        val root = yaml.parseToYamlNode(yamlText) as? YamlMap ?: return null
-        val keyboardNode = root["keyboard"] as? YamlMap ?: return null
-        var cornerRadius = 8
-        var spacingX: Float? = null
-        var spacingY: Float? = null
-        val spacingOverrides = mutableMapOf<String, KeyboardSpacingConfig>()
-        // 优先读取 key.corner_radius
-        val keyNode = keyboardNode["key"] as? YamlMap
-        if (keyNode != null) {
-            for ((kNode, vNode) in keyNode.entries) {
-                val key = (kNode as? YamlScalar)?.content ?: continue
-                if (key == "corner_radius") {
-                    val value = (vNode as? YamlScalar)?.content ?: continue
-                    cornerRadius = value.toIntOrNull() ?: 8
-                } else if (key == "spacing_x") {
-                    val value = (vNode as? YamlScalar)?.content ?: continue
-                    spacingX = value.toFloatOrNull()
-                } else if (key == "spacing_y") {
-                    val value = (vNode as? YamlScalar)?.content ?: continue
-                    spacingY = value.toFloatOrNull()
-                } else if (vNode is YamlMap) {
-                    // 键盘级间距覆盖：keyboard.key.<键盘名>.spacing_x/spacing_y
-                    var overrideX: Float? = null
-                    var overrideY: Float? = null
-                    for ((skNode, svNode) in vNode.entries) {
-                        val skey = (skNode as? YamlScalar)?.content ?: continue
-                        val svalue = (svNode as? YamlScalar)?.content ?: continue
-                        if (skey == "spacing_x") {
-                            overrideX = svalue.toFloatOrNull()
-                        } else if (skey == "spacing_y") {
-                            overrideY = svalue.toFloatOrNull()
+            // 未设置 key.corner_radius 时，回退读取 shadow.shape_radius
+            if (cornerRadius == null) {
+                val shadowNode = keyboardNode.opt<YamlMap>("shadow")
+                if (shadowNode != null) {
+                    for ((kNode, vNode) in shadowNode.entries) {
+                        val key = (kNode as? YamlScalar)?.content ?: continue
+                        val value = (vNode as? YamlScalar)?.content ?: continue
+                        if (key == "shape_radius") {
+                            cornerRadius = value.toIntOrNull()
                         }
                     }
-                    spacingOverrides[key] = KeyboardSpacingConfig(overrideX, overrideY)
                 }
             }
+            KeyboardKeyPartial(
+                cornerRadius = cornerRadius,
+                spacingX = spacingX,
+                spacingY = spacingY,
+                spacingOverrides = spacingOverrides.ifEmpty { null },
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to parse keyboard key config", e)
+            null
         }
-        // 未设置 key.corner_radius 时，回退读取 shadow.shape_radius
-        if (cornerRadius == 8) {
-            val shadowNode = keyboardNode["shadow"] as? YamlMap
-            if (shadowNode != null) {
-                for ((kNode, vNode) in shadowNode.entries) {
-                    val key = (kNode as? YamlScalar)?.content ?: continue
-                    val value = (vNode as? YamlScalar)?.content ?: continue
-                    if (key == "shape_radius") {
-                        cornerRadius = value.toIntOrNull() ?: 8
-                    }
-                }
-            }
-        }
-        return KeyboardKeyConfig(
-            cornerRadius = cornerRadius,
-            spacingX = spacingX,
-            spacingY = spacingY,
-            spacingOverrides = spacingOverrides,
-        )
     }
 
-    /** 从 xime.yaml + xime.custom.yaml 合并解析字体配置。 */
+    /** 从 xime.yaml + xime.custom.yaml 合并解析字体配置（字段级一路 fallback）。 */
     private fun parseKeyboardFontsFromAssets(context: Context): KeyboardFontConfig {
-        val defaultText = readAssetText(context, XIME_CONFIG_FILE) ?: return KeyboardFontConfig()
-        val default = parseKeyboardFontsYamlText(defaultText) ?: return KeyboardFontConfig()
-        val custom = readUserDataText(context, XIME_CUSTOM_CONFIG_FILE)
+        val builtIn = readAssetText(context, XIME_CONFIG_FILE)
             ?.let { parseKeyboardFontsYamlText(it) }
-            ?: readAssetText(context, XIME_CUSTOM_CONFIG_FILE)
-                ?.let { parseKeyboardFontsYamlText(it) }
-        return custom ?: default
+        val custom = readCustomText(context)?.let { parseKeyboardFontsYamlText(it) }
+        return mergeFontConfigs(custom, builtIn)
     }
 
-    /** 从 YAML 文本中提取 keyboard.fonts 字体配置段。 */
-    private fun parseKeyboardFontsYamlText(yamlText: String): KeyboardFontConfig? {
-        val root = yaml.parseToYamlNode(yamlText) as? YamlMap ?: return null
-        val keyboardNode = root["keyboard"] as? YamlMap ?: return null
-        val fontsNode = keyboardNode["fonts"] as? YamlMap ?: return null
-        var keyFont = ""
-        var keyLabelFont = ""
-        var candidateFont = ""
-        var commentFont = ""
-        for ((kNode, vNode) in fontsNode.entries) {
-            val key = (kNode as? YamlScalar)?.content ?: continue
-            val value = (vNode as? YamlScalar)?.content ?: continue
-            when (key) {
-                "key_font" -> keyFont = value
-                "key_label_font" -> keyLabelFont = value
-                "candidate_font" -> candidateFont = value
-                "comment_font" -> commentFont = value
-            }
-        }
-        return KeyboardFontConfig(
-            keyFont = keyFont,
-            keyLabelFont = keyLabelFont,
-            candidateFont = candidateFont,
-            commentFont = commentFont
+    /** 字段级一路 fallback 合并字体配置：custom → builtIn → 代码默认值（空字符串视为未配置）。 */
+    internal fun mergeFontConfigs(custom: KeyboardFontPartial?, builtIn: KeyboardFontPartial?): KeyboardFontConfig =
+        KeyboardFontConfig(
+            keyFont = tieredText(custom?.keyFont, builtIn?.keyFont, ""),
+            keyLabelFont = tieredText(custom?.keyLabelFont, builtIn?.keyLabelFont, ""),
+            candidateFont = tieredText(custom?.candidateFont, builtIn?.candidateFont, ""),
+            commentFont = tieredText(custom?.commentFont, builtIn?.commentFont, ""),
         )
+
+    /** 从 YAML 文本中提取 keyboard.fonts 字体配置段（仅显式字段非 null）。 */
+    internal fun parseKeyboardFontsYamlText(yamlText: String): KeyboardFontPartial? {
+        return try {
+            val root = yaml.parseToYamlNode(yamlText) as? YamlMap ?: return null
+            val keyboardNode = root.opt<YamlMap>("keyboard") ?: return null
+            val fontsNode = keyboardNode.opt<YamlMap>("fonts") ?: return null
+            var keyFont: String? = null
+            var keyLabelFont: String? = null
+            var candidateFont: String? = null
+            var commentFont: String? = null
+            for ((kNode, vNode) in fontsNode.entries) {
+                val key = (kNode as? YamlScalar)?.content ?: continue
+                val value = (vNode as? YamlScalar)?.content ?: continue
+                when (key) {
+                    "key_font" -> keyFont = value
+                    "key_label_font" -> keyLabelFont = value
+                    "candidate_font" -> candidateFont = value
+                    "comment_font" -> commentFont = value
+                }
+            }
+            KeyboardFontPartial(
+                keyFont = keyFont,
+                keyLabelFont = keyLabelFont,
+                candidateFont = candidateFont,
+                commentFont = commentFont,
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to parse keyboard fonts config", e)
+            null
+        }
     }
 
     /** 从 xime.yaml + xime.custom.yaml 合并解析按键布局模式（中英文分开）。 */
@@ -847,44 +982,59 @@ object KeysConfigHelper {
 
     /** 从 YAML 文本中提取 keyboard.<section>.layout.rows。 */
     private fun parseKeyboardLayoutYamlText(yamlText: String, section: String): List<List<String>>? {
-        val root = yaml.parseToYamlNode(yamlText) as? YamlMap ?: return null
-        val keyboardNode = root["keyboard"] as? YamlMap ?: return null
-        val sectionNode = keyboardNode[section] as? YamlMap ?: return null
-        val layoutNode = sectionNode["layout"] as? YamlMap ?: return null
-        val rowsNode = layoutNode["rows"] as? YamlList ?: return null
-        val rows = mutableListOf<List<String>>()
-        for (rowNode in rowsNode.items) {
-            val rowList = rowNode as? YamlList ?: continue
-            val row = rowList.items.mapNotNull { (it as? YamlScalar)?.content }
-            if (row.isNotEmpty()) {
-                rows.add(row)
+        return try {
+            val root = yaml.parseToYamlNode(yamlText) as? YamlMap ?: return null
+            val keyboardNode = root.opt<YamlMap>("keyboard") ?: return null
+            val sectionNode = keyboardNode.opt<YamlMap>(section) ?: return null
+            val layoutNode = sectionNode.opt<YamlMap>("layout") ?: return null
+            val rowsNode = layoutNode.opt<YamlList>("rows") ?: return null
+            val rows = mutableListOf<List<String>>()
+            for (rowNode in rowsNode.items) {
+                val rowList = rowNode as? YamlList ?: continue
+                val row = rowList.items.mapNotNull { (it as? YamlScalar)?.content }
+                if (row.isNotEmpty()) {
+                    rows.add(row)
+                }
             }
+            rows.takeIf { it.isNotEmpty() }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to parse keyboard layout config", e)
+            null
         }
-        return rows.takeIf { it.isNotEmpty() }
     }
 
     /** 从 YAML 文本中提取 keyboard.<section>.button_layout。 */
     private fun parseButtonLayoutYamlText(yamlText: String, section: String): ButtonLayout? {
-        val root = yaml.parseToYamlNode(yamlText) as? YamlMap ?: return null
-        val keyboardNode = root["keyboard"] as? YamlMap ?: return null
-        val sectionNode = keyboardNode[section] as? YamlMap ?: return null
-        val layoutNode = sectionNode["button_layout"] as? YamlScalar ?: return null
-        return ButtonLayout.fromValue(layoutNode.content)
+        return try {
+            val root = yaml.parseToYamlNode(yamlText) as? YamlMap ?: return null
+            val keyboardNode = root.opt<YamlMap>("keyboard") ?: return null
+            val sectionNode = keyboardNode.opt<YamlMap>(section) ?: return null
+            val layoutNode = sectionNode.opt<YamlScalar>("button_layout") ?: return null
+            ButtonLayout.fromValue(layoutNode.content)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to parse button layout config", e)
+            null
+        }
     }
 
     /** 从 YAML 文本中提取 keyboard.<section>.keys 段。 */
     private fun parseKeyboardYamlSection(yamlText: String, section: String): Map<String, KeyGestureConfig>? {
-        val root = yaml.parseToYamlNode(yamlText) as? YamlMap ?: return null
-        val keyboardNode = root["keyboard"] as? YamlMap ?: return null
-        val sectionNode = keyboardNode[section] as? YamlMap ?: return null
-        val keysNode = sectionNode["keys"] as? YamlMap ?: return null
-        val result = mutableMapOf<String, KeyGestureConfig>()
-        for ((kNode, vNode) in keysNode.entries) {
-            val key = (kNode as? YamlScalar)?.content ?: continue
-            val gestureMap = vNode as? YamlMap ?: continue
-            result[key] = parseKeyGestureConfig(gestureMap)
+        return try {
+            val root = yaml.parseToYamlNode(yamlText) as? YamlMap ?: return null
+            val keyboardNode = root.opt<YamlMap>("keyboard") ?: return null
+            val sectionNode = keyboardNode.opt<YamlMap>(section) ?: return null
+            val keysNode = sectionNode.opt<YamlMap>("keys") ?: return null
+            val result = mutableMapOf<String, KeyGestureConfig>()
+            for ((kNode, vNode) in keysNode.entries) {
+                val key = (kNode as? YamlScalar)?.content ?: continue
+                val gestureMap = vNode as? YamlMap ?: continue
+                result[key] = parseKeyGestureConfig(gestureMap)
+            }
+            result
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to parse keyboard gesture section", e)
+            null
         }
-        return result
     }
 
     private fun loadMergedConfig(context: Context): XimeConfig {
@@ -1015,6 +1165,11 @@ object KeysConfigHelper {
             null
         }
     }
+
+    /** 读取自定义配置文本：优先用户数据目录（浏览器导入），回退 assets 内置。 */
+    private fun readCustomText(context: Context): String? =
+        readUserDataText(context, XIME_CUSTOM_CONFIG_FILE)
+            ?: readAssetText(context, XIME_CUSTOM_CONFIG_FILE)
 
     fun loadXimeIndexConfig(context: Context): XimeIndexConfig {
         val merged = loadMergedConfig(context)
