@@ -28,7 +28,7 @@ import java.nio.charset.Charset
  * ```
  * - x/y 为作画区局部像素坐标（原点左上，y 向下），未归一化；
  * - t0 为笔画起点相对样本首笔起点的毫秒数，pts 内第三列为相对 t0 的毫秒数；
- * - 归一化在训练侧执行，算法与推理侧 HandwritingEngine.strokesToSequence 一致。
+ * - 归一化在训练侧执行，算法与推理侧 HandwritingInference.strokesToSequence 一致。
  */
 object HandwritingSampleCodec {
 
@@ -79,7 +79,7 @@ object HandwritingSampleCodec {
         root.put(
             "normalization",
             "per-sample bounding box: (x-minX)/max(rangeX,1), (y-minY)/max(rangeY,1); " +
-                "identical to HandwritingEngine.strokesToSequence"
+                "identical to HandwritingInference.strokesToSequence"
         )
         root.put(
             "meta",

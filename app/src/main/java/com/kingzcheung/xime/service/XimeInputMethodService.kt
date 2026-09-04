@@ -579,6 +579,8 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
                                 if (!alreadyHandwriting) {
                                     keyboardViewModel.switchMain(com.kingzcheung.xime.keyboard.MainType.HANDWRITING)
                                 }
+                                // 手写模型按"用键盘时加载"管理：不在此预载，
+                                // HandwritingKeyboardLayout 创建时（LaunchedEffect）负责加载
                             } else {
                                 Log.w(TAG, "initRimeEngine: handwriting model missing, keep full keyboard")
                                 android.widget.Toast.makeText(
@@ -1457,8 +1459,32 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
             // 容器物理高度 = Compose 内容总高，小于全屏窗口时若默认 top-left
             // 对齐会让键盘跑到屏顶。高度由 SideEffect 的 updateHeight 动态设置。
             view.updateLayoutParams<android.widget.FrameLayout.LayoutParams> {
-                height = android.view.ViewGroup.LayoutParams.MATCH_PARENT
                 gravity = android.view.Gravity.BOTTOM
+            }
+            val state = uiState.value
+            if (state.isFloatingMode || state.isCompact) {
+                view.updateLayoutParams<android.widget.FrameLayout.LayoutParams> {
+                    height = android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                }
+            } else {
+                // 首显前预设容器高度：容器初始 MATCH_PARENT（贴底 → 顶部 y=0）会让窗口
+                // 第一次 traversal 的 onComputeInsets 报告"键盘占满全屏"，而 SideEffect 的
+                // updateHeight 下一帧才生效；部分应用按首次 inset 布局后不再响应修正，
+                // 输入框被顶到屏顶、与键盘间留大片空白（重进时容器已带正确高度故不复现）。
+                // 按偏好高度预设首帧真实几何，之后仍由 SideEffect 统一维护。
+                val isLandscape =
+                    resources.configuration.screenWidthDp > resources.configuration.screenHeightDp
+                val displayHeight = SettingsPreferences.getKeyboardHeightDp(this, isLandscape)
+                    .coerceAtMost((resources.configuration.screenHeightDp * 8) / 10)
+                val density = resources.displayMetrics.density
+                val rawDp = if (bottomInsetPxState.value > 0)
+                    (bottomInsetPxState.value / density).toInt() else 0
+                val extraShrink = if (rawDp >= 120) 8 else 0
+                val bottomSpace = if (rawDp > 0) (rawDp - 8 - extraShrink).coerceAtLeast(0) else 0
+                val activeBottomDp = if (bottomSpace == 0) 18 else bottomSpace
+                view.updateLayoutParams<android.widget.FrameLayout.LayoutParams> {
+                    height = ((displayHeight + state.keyboardBottomPaddingDp + activeBottomDp) * density).toInt()
+                }
             }
         } catch (_: Exception) {}
     }
@@ -1624,6 +1650,8 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
                         } else {
                             debugLog("onStartInput: saved schema is handwriting, keeping handwriting mode")
                             keyboardViewModel.switchMain(com.kingzcheung.xime.keyboard.MainType.HANDWRITING)
+                            // 手写模型按"用键盘时加载"管理：不在此加载/重载，
+                            // 布局创建（LaunchedEffect）与落笔时的 predict 自愈兜底
                             actualSchema = savedSchema
                         }
                     }
@@ -1919,6 +1947,14 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
         recentClipboardItemsState.value = emptyList()
     }
     
+    override fun onFinishInputView(finishingInput: Boolean) {
+        super.onFinishInputView(finishingInput)
+        // 手写模型轻量，按"用键盘时加载、键盘收起即卸载"管理：输入会话结束
+        // （收起键盘/焦点离开）即释放，:inference 侧同步卸载模型；未初始化时
+        // release() 幂等空操作。下次落笔由 predict 自愈或布局重建重载。
+        com.kingzcheung.xime.handwriting.HandwritingEngine.release()
+    }
+
     override fun onWindowHidden() {
         super.onWindowHidden()
         clearInputState()
