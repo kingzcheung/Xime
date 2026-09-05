@@ -125,6 +125,7 @@ include_directories(
     "${CMAKE_SOURCE_DIR}/boost/libs/static_assert/include"
     "${CMAKE_SOURCE_DIR}/boost/libs/mpl/include"
     "${CMAKE_SOURCE_DIR}/boost/libs/preprocessor/include"
+    "${CMAKE_SOURCE_DIR}/boost/libs/vmd/include"
     "${CMAKE_SOURCE_DIR}/boost/libs/type_traits/include"
     "${CMAKE_SOURCE_DIR}/boost/libs/smart_ptr/include"
     "${CMAKE_SOURCE_DIR}/boost/libs/move/include"
