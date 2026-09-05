@@ -1228,6 +1228,33 @@ internal class ImeKeyRouter(private val service: XimeInputMethodService) {
             }
         }
     }
+
+    /**
+     * 长按候选删除自造词（键盘无关，T9/全键盘通用）。
+     * 标准 C API delete_candidate_on_current_page：librime 对 userdb 词条
+     * 做 tombstone 标记（UpdateEntry -1），对非用户词由 rime 侧自行判定。
+     * 显示索引经 resolveRimeCandidateIndex 映射回引擎原始索引（插件候选
+     * 注入会使两者错位，与 selectCandidateAsync 同口径），删除后刷新候选。
+     */
+    internal fun deleteCandidate(displayIndex: Int) {
+        postRimeJob {
+            val text = service.candidateState.value.candidates.getOrNull(displayIndex)
+            if (text.isNullOrEmpty()) return@postRimeJob
+            val engineIndex = resolveRimeCandidateIndex(
+                displayIndex, text, service.rimeEngine.getCandidates().toList()
+            )
+            val ok = service.rimeEngine.deleteCandidateOnCurrentPage(engineIndex)
+            FileLogger.i(
+                XimeInputMethodService.TAG,
+                "DeleteCandidate: text='$text' display=$displayIndex engine=$engineIndex ok=$ok"
+            )
+            if (ok) {
+                withContext(Dispatchers.Main) {
+                    service.updateUI()
+                }
+            }
+        }
+    }
     
     internal fun pageDown() {
         postRimeJob {
