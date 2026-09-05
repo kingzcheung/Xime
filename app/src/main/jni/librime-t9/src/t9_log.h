@@ -84,6 +84,13 @@ struct ScopedTimer {
 // 日志宏：编译期开关 T9_ENABLE_VERBOSE_LOG
 // ════════════════════════════════════════
 
+#ifdef __ANDROID__
+    #define T9_DICT_LOG(...) \
+        __android_log_print(ANDROID_LOG_INFO, "RimePerf", "[T9Dict] " __VA_ARGS__)
+#else
+    #define T9_DICT_LOG(...) do { } while (0)
+#endif
+
 #ifdef T9_ENABLE_VERBOSE_LOG
     // 通用日志宏：指定 TAG（推荐统一入口）
     #ifdef __ANDROID__

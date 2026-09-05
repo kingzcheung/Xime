@@ -746,27 +746,29 @@ bool T9Processor::MemorizeEntry(const std::string& text,
     const std::string& digits = last_commit_digit_sequence_;
     std::string full_code_str = T9DigitUserDictCore::PinyinToFullCode(pinyin);
 
-    if (!full_code_str.empty() && !digits.empty() && full_code_str == digits) {
-        // 音节图可达 → 写 RIME userdb
-        DictEntry entry;
-        if (BuildEntryForPinyin(text, pinyin, &entry)) {
-            T9LOG(">> MemorizeEntry: full_code=='%s'==digits, write RIME userdb",
-                  full_code_str.c_str());
-            WriteDictEntry(text, entry.code, 1);
-        } else {
-            T9LOG(">> MemorizeEntry: BuildEntryForPinyin failed, fallback to T9 digit dict");
-            if (!text.empty() && !digits.empty()) {
-                T9DigitUserDict::Instance().Memorize(digits, text, pinyin);
-            }
-        }
-    } else {
-        // 音节图不可达 → 写 T9 数字词典
-        if (!text.empty() && !digits.empty()) {
-            T9LOG(">> MemorizeEntry: full_code='%s' != digits='%s', write T9 digit dict",
-                  full_code_str.c_str(), digits.c_str());
-            T9DigitUserDict::Instance().Memorize(digits, text, pinyin);
-        }
+    // 统一优先写 RIME userdb：召回由 script_translator 的 UserDictionary
+    // 音节图查询承担，按「拼音音节路径」召回，对多段拼接自造词（左选择器
+    // 分段上屏）、简拼组词都鲁棒。旧的 full_code==digits 判定按「单段整串
+    // 提交」设计：经选择器分段上屏时 last_commit_digit_sequence_ 带左选
+    // 后缀（如 "584826494664:lu"）或被截断，多段词被错误路由进 T9 数字
+    // 词典——其召回器 t9_user_translator 已移除，且精确数字键匹配天然
+    // 召回不到重输场景（卢广仲案例：第二次输入候选列表与未学习时完全相同）。
+    // 仅当拼音无法解析为音节码（英文/符号混入）时才退回数字词典。
+    DictEntry entry;
+    bool userdb_ok = false;
+    const bool resolvable = BuildEntryForPinyin(text, pinyin, &entry);
+    if (resolvable) {
+        userdb_ok = WriteDictEntry(text, entry.code, 1);
+    } else if (!text.empty() && !digits.empty()) {
+        T9DigitUserDict::Instance().Memorize(digits, text, pinyin);
     }
+    // 地面真相诊断：T9LOG 发布包被 T9_ENABLE_VERBOSE_LOG 门控，用
+    // RimePerf INFO 直出（与 [T9Inc] 同模式），真机可据此判断调频路由。
+    T9_DICT_LOG(
+        "memorize text='%s' pinyin='%s' digits='%s' full_code='%s' "
+        "resolvable=%d userdb_ok=%d",
+        text.c_str(), pinyin.c_str(), digits.c_str(), full_code_str.c_str(),
+        resolvable ? 1 : 0, userdb_ok ? 1 : 0);
     return true;
 }
 
