@@ -183,15 +183,13 @@ bool ApostropheStrategy::HandleCanCoverAll(
         int unassigned_syl_index = static_cast<int>(buf.selections.size());
         if (unassigned_syl_index < alignment.syllable_count()) {
             const std::string& syl_code = alignment.syllable_codes[unassigned_syl_index];
-            if (!syl_code.empty()) {
-                if (unassigned_str.size() == 1 &&
-                    syl_code[0] == unassigned_str[0]) {
-                    unassigned_covered = true;
-                } else if (unassigned_str.size() > 1 &&
-                           syl_code.size() >= unassigned_str.size() &&
-                           syl_code.compare(0, unassigned_str.size(), unassigned_str) == 0) {
-                    unassigned_covered = true;
-                }
+            // 必须精确相等：候选音节数字码比 unassigned 长（如 hen=436 vs
+            // unassigned "43"）说明多出的数字用户从未输入（RIME completion
+            // 候选），不能视为覆盖，否则半提交被误判为 full commit。
+            // 消费量已由对齐算法阶段 2 规则 4a 正确退化为声母 1 位，
+            // 此处判定必须与之一致。
+            if (!syl_code.empty() && syl_code == unassigned_str) {
+                unassigned_covered = true;
             }
         }
     }

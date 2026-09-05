@@ -43,9 +43,19 @@ ExtraSyllableCommitCheck LetterBufferStrategy::CheckExtraSyllableCommit(
         selection_count, static_cast<int>(comment_syllables.size())) - 1;
     if (cover_idx < 0) cover_idx = 0;
     const std::string& syl_covering_prev_opt = comment_syllables[cover_idx];
+    // 覆盖判定：
+    // - 精确相等：恒为覆盖。
+    // - 候选音节是末选择的更长音节（StartsWith）时，仅当末选择是简拼
+    //   声母（单字母，如 "w" → "wan"）才视为覆盖——简拼语义即"以该
+    //   声母开头的音节均可"。
+    //   末选择是全拼（≥2 字母，如 "he"）时，更长的候选音节（"hen"）
+    //   是不同的音节，多出的数字（n→6）用户从未输入（RIME completion
+    //   候选），不视为覆盖，否则半提交被误判为 full commit（phantom
+    //   consumption，如 5143 左选 k+he 右选"可恨"）。
     check.last_syl_covers_prev_opt =
         syl_covering_prev_opt == prev_selected_option.pinyin ||
-        StartsWith(syl_covering_prev_opt, prev_selected_option.pinyin);
+        (prev_selected_option.pinyin.size() == 1 &&
+         StartsWith(syl_covering_prev_opt, prev_selected_option.pinyin));
     // 公共前缀长度：末音节是末选择真前缀（如 'gu' ⊂ 'gua'）时，
     // 该长度决定退还未消费位数（initials-only 分支据此计算，替代固定 digit_length-1）。
     // T9 数字码与拼音字母 1:1，字母前缀长度即已消费的数字位数。
@@ -56,6 +66,15 @@ ExtraSyllableCommitCheck LetterBufferStrategy::CheckExtraSyllableCommit(
     while (overlap < max_overlap &&
            syl_covering_prev_opt[overlap] == prev_selected_option.pinyin[overlap]) {
         ++overlap;
+    }
+    // 全拼末选择被更长不同音节覆盖而未达成覆盖判定时，超出末选择的
+    // 数字未被输入，该音节只消费声母 1 位数字——与对齐算法阶段 2
+    // 规则 4a「候选音节比剩余数字长 → 退化声母 1 位」一致
+    // （如 "hen" ⊃ "he" 只消费 '4'，剩余 '3'→e）。
+    if (!check.last_syl_covers_prev_opt &&
+        syl_covering_prev_opt.size() > prev_selected_option.pinyin.size() &&
+        StartsWith(syl_covering_prev_opt, prev_selected_option.pinyin)) {
+        overlap = 1;
     }
     check.covered_prefix_len = overlap;
 

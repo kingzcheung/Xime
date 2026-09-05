@@ -1,5 +1,6 @@
 import java.text.SimpleDateFormat
 import java.util.Date
+import org.gradle.api.tasks.PathSensitivity
 
 // 使用官方 Maven 预编译 onnxruntime-android AAR（内置 CPU + NNAPI EP），
 // 不再从源码自行编译（自行编译需 30-60 分钟且依赖网络/NDK 稳定性）。
@@ -352,6 +353,42 @@ val downloadKnf by tasks.registering {
 }
 
 // 离线 ASR 已集成进主版本，KNF 源码始终需要，preBuild 直接依赖 downloadKnf。
+
+// ── librime native 构建输入保障（修"改了 C++ 代码 Run 不重编"）──
+// 1) librime-t9 权威源码在顶层 jni/librime-t9，编译副本 plugins/librime-t9 由
+//    Rime.cmake 在 configure 时 file(COPY) 同步。Gradle 感知不到权威源码变化、
+//    不重新 configure 时副本就是旧的。改为构建期同步（Copy 增量：源变才拷，
+//    拷后副本 mtime 更新，ninja 据此重编对应文件）。
+val syncT9Plugin by tasks.registering {
+    val authoritative = file("src/main/jni/librime-t9")
+    val mirror = file("src/main/jni/librime/plugins/librime-t9")
+    inputs.dir(authoritative)
+    outputs.dir(mirror)
+    doLast {
+        copy {
+            from(authoritative)
+            into(mirror)
+            exclude("build_test/**")  // 本地单测构建产物，不入镜像
+        }
+    }
+}
+
+// 2) 把 librime 核心/插件源码目录声明为 native 构建任务的显式输入：
+//    AGP 对 CMake 任务的 up-to-date 判断不覆盖 submodule 源文件，
+//    缺失该输入时 Android Studio 的 Run 会直接跳过 ninja，
+//    改动（尤其 librime/src 核心改动）不会进 APK。
+//    声明后：源码一变任务必然执行，ninja 按依赖增量重编，仍然很快。
+tasks.configureEach {
+    if (name.startsWith("buildCMake")) {
+        dependsOn(syncT9Plugin)
+        inputs.dir("src/main/jni/librime/src")
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+            .optional(true)
+        inputs.dir("src/main/jni/librime-t9")
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+            .optional(true)
+    }
+}
 
 tasks.named("preBuild").configure {
     dependsOn(downloadOnnx)

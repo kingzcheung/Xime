@@ -1704,5 +1704,151 @@ TEST(T9RightCommitHandlerTest, LetterBufferPartialCommit_8268426_Tiao_Duplicated
     EXPECT_FALSE(result);   // partial commit — history 重复导致 full commit 判定失败
 }
 
+// ── 场景 [Bug-2026-09-05] 末音节是末选择的「更长不同音节」误判 full commit ──
+// 输入 5→1→4→3（digitSeq="543"）左选 k + 左选 he 后右选"可恨 ke hen"：
+// hen(436) 以 he(43) 为字母/数字前缀但多出 n→6（用户从未输入，RIME
+// completion 候选）。修复前 StartsWith("hen","he") 误判为覆盖 → full commit；
+// 修复后应与"开户 kai hu"（hu 不以 he 为前缀）一致：半提交，退还 1 位，
+// 剩余 '3'→e。
+TEST(T9RightCommitHandlerTest, LetterBuffer_KeHen_543_ExtendedLastSyllable_PartialCommit) {
+    std::vector<SyllableOption> sels{SyllableOption("k", 1), SyllableOption("he", 2)};
+    std::vector<SyllableOption> history{sels[0], sels[1]};
+    auto ctx = MakeContext({
+        .digits = "543",
+        .selections = sels,
+        .consumed_count = 3,
+        .state = T9StateMachine::State::kSelection,
+        .selected_option = sels[1],
+        .selection_candidate_digits = std::optional<std::string>("43"),
+        .confirmed_pinyin = "k",
+        .selection_history = history
+    });
+    T9RightCommitHandler handler;
+    bool result = handler.HandleRightCommit(ctx, std::optional<std::string>("ke hen"), 2);
+    EXPECT_FALSE(result);                              // partial commit
+    EXPECT_TRUE(ctx.input_buffer.selections.empty());  // selections 已消费
+    EXPECT_EQ(ctx.input_buffer.unassigned(), "3");     // 退还 he 的末位 'e'→3
+}
+
+// 参照锚定：kai hu（末音节与末选择分歧）行为不变——半提交剩余 '3'。
+TEST(T9RightCommitHandlerTest, LetterBuffer_KaiHu_543_DivergingLastSyllable_PartialCommit) {
+    std::vector<SyllableOption> sels{SyllableOption("k", 1), SyllableOption("he", 2)};
+    std::vector<SyllableOption> history{sels[0], sels[1]};
+    auto ctx = MakeContext({
+        .digits = "543",
+        .selections = sels,
+        .consumed_count = 3,
+        .state = T9StateMachine::State::kSelection,
+        .selected_option = sels[1],
+        .selection_candidate_digits = std::optional<std::string>("43"),
+        .confirmed_pinyin = "k",
+        .selection_history = history
+    });
+    T9RightCommitHandler handler;
+    bool result = handler.HandleRightCommit(ctx, std::optional<std::string>("kai hu"), 2);
+    EXPECT_FALSE(result);
+    EXPECT_EQ(ctx.input_buffer.unassigned(), "3");
+}
+
+// 回归锚定：末音节精确等于末选择（"考核 kao he"）仍 full commit。
+TEST(T9RightCommitHandlerTest, LetterBuffer_KaoHe_543_ExactLastSyllable_FullCommit) {
+    std::vector<SyllableOption> sels{SyllableOption("k", 1), SyllableOption("he", 2)};
+    std::vector<SyllableOption> history{sels[0], sels[1]};
+    auto ctx = MakeContext({
+        .digits = "543",
+        .selections = sels,
+        .consumed_count = 3,
+        .state = T9StateMachine::State::kSelection,
+        .selected_option = sels[1],
+        .selection_candidate_digits = std::optional<std::string>("43"),
+        .confirmed_pinyin = "k",
+        .selection_history = history
+    });
+    T9RightCommitHandler handler;
+    bool result = handler.HandleRightCommit(ctx, std::optional<std::string>("kao he"), 2);
+    EXPECT_TRUE(result);                               // full commit
+    EXPECT_TRUE(ctx.input_buffer.is_empty());
+}
+
+// 同类误判词："抗衡 kang heng"（heng ⊃ he）应半提交剩余 '3'。
+TEST(T9RightCommitHandlerTest, LetterBuffer_KangHeng_543_ExtendedLastSyllable_PartialCommit) {
+    std::vector<SyllableOption> sels{SyllableOption("k", 1), SyllableOption("he", 2)};
+    std::vector<SyllableOption> history{sels[0], sels[1]};
+    auto ctx = MakeContext({
+        .digits = "543",
+        .selections = sels,
+        .consumed_count = 3,
+        .state = T9StateMachine::State::kSelection,
+        .selected_option = sels[1],
+        .selection_candidate_digits = std::optional<std::string>("43"),
+        .confirmed_pinyin = "k",
+        .selection_history = history
+    });
+    T9RightCommitHandler handler;
+    bool result = handler.HandleRightCommit(ctx, std::optional<std::string>("kang heng"), 2);
+    EXPECT_FALSE(result);
+    EXPECT_EQ(ctx.input_buffer.unassigned(), "3");
+}
+
+// 场景二：只左选 k（'43' 处于 unassigned），右选"可恨 ke hen"。
+// 修复前 HandleCanCoverAll 用数字码前缀匹配（436 ⊃ 43）误判覆盖 → full commit；
+// 修复后要求精确相等，与对齐算法阶段 2 规则 4a（退化声母 1 位）一致：
+// 消费 '4'，剩余 '3'→e。
+TEST(T9RightCommitHandlerTest, Apostrophe_KeHen_543_ExtendedSyllableOverUnassigned_PartialCommit) {
+    std::vector<SyllableOption> sels{SyllableOption("k", 1)};
+    auto ctx = MakeContext({
+        .digits = "543",
+        .selections = sels,
+        .consumed_count = 1,
+        .state = T9StateMachine::State::kInput,
+        .selected_option = sels[0],
+        .selection_candidate_digits = std::optional<std::string>("5"),
+        .confirmed_pinyin = "",
+        .selection_history = {sels[0]}
+    });
+    T9RightCommitHandler handler;
+    bool result = handler.HandleRightCommit(ctx, std::optional<std::string>("ke hen"), 2);
+    EXPECT_FALSE(result);                              // partial commit
+    EXPECT_EQ(ctx.input_buffer.unassigned(), "3");     // 消费 '4'，剩余 '3'
+}
+
+// 场景二参照锚定：kai hu 行为不变。
+TEST(T9RightCommitHandlerTest, Apostrophe_KaiHu_543_KSelected_PartialCommit) {
+    std::vector<SyllableOption> sels{SyllableOption("k", 1)};
+    auto ctx = MakeContext({
+        .digits = "543",
+        .selections = sels,
+        .consumed_count = 1,
+        .state = T9StateMachine::State::kInput,
+        .selected_option = sels[0],
+        .selection_candidate_digits = std::optional<std::string>("5"),
+        .confirmed_pinyin = "",
+        .selection_history = {sels[0]}
+    });
+    T9RightCommitHandler handler;
+    bool result = handler.HandleRightCommit(ctx, std::optional<std::string>("kai hu"), 2);
+    EXPECT_FALSE(result);
+    EXPECT_EQ(ctx.input_buffer.unassigned(), "3");
+}
+
+// 场景二回归锚定：末音节精确等于 unassigned（"ke he"）仍 full commit。
+TEST(T9RightCommitHandlerTest, Apostrophe_KeHe_543_ExactSyllableOverUnassigned_FullCommit) {
+    std::vector<SyllableOption> sels{SyllableOption("k", 1)};
+    auto ctx = MakeContext({
+        .digits = "543",
+        .selections = sels,
+        .consumed_count = 1,
+        .state = T9StateMachine::State::kInput,
+        .selected_option = sels[0],
+        .selection_candidate_digits = std::optional<std::string>("5"),
+        .confirmed_pinyin = "",
+        .selection_history = {sels[0]}
+    });
+    T9RightCommitHandler handler;
+    bool result = handler.HandleRightCommit(ctx, std::optional<std::string>("ke he"), 2);
+    EXPECT_TRUE(result);                               // full commit
+    EXPECT_TRUE(ctx.input_buffer.is_empty());
+}
+
 }  // namespace
 }  // namespace rime

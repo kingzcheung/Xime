@@ -57,7 +57,18 @@ internal class ImeSessionController(private val service: XimeInputMethodService)
         val isComposing: Boolean
         var t9CandidateActions: List<CandidateAction> = emptyList()
         if (isT9Schema) {
-            val rawPreedit = if (preeditText.isNotEmpty()) preeditText else inputText
+            // T9 编码显示永不回退原始数字 input：preedit 缺失，或含未转换数字
+            //（合成切不出词时引擎把原始输入当编码回退，如全拼+简拼混合态）时，
+            // 保留上一帧字母编码，用户看到的编码必须是字母
+            val rawPreedit = when {
+                preeditText.isNotEmpty() && preeditText.none { it.isDigit() } -> preeditText
+                inputText.isEmpty() -> ""
+                else -> service.candidateState.value.preeditText
+            }
+            FileLogger.i(
+                XimeInputMethodService.TAG,
+                "T9 display: enginePreedit='$preeditText' rawPreedit='$rawPreedit' input='$inputText' partials=${service.t9PartialSegments.size}"
+            )
             // preedit 转换由 C++ t9_filter 完成，Kotlin 侧直接使用引擎输出的 preedit
             val display = buildT9DisplayState(
                 service.t9PartialSegments.map { it.text }, rawPreedit, inputText, t9FilteredTexts, t9FilteredComments
@@ -200,8 +211,13 @@ internal class ImeSessionController(private val service: XimeInputMethodService)
         val displayComments: List<String>
         val isComposing: Boolean
         if (isT9Schema) {
-            val rawPreedit = if (result.preeditText.isNotEmpty()) result.preeditText else result.inputText
-            // preedit 转换由 C++ t9_filter 完成，Kotlin 侧直接使用引擎输出的 preedit
+            // 同 applyComposition：T9 编码显示永不回退原始数字 input，
+            // preedit 缺失或含未转换数字时保留上一帧字母编码
+            val rawPreedit = when {
+                result.preeditText.isNotEmpty() && result.preeditText.none { it.isDigit() } -> result.preeditText
+                result.inputText.isEmpty() -> ""
+                else -> service.candidateState.value.preeditText
+            }
             val display = buildT9DisplayState(
                 service.t9PartialSegments.map { it.text }, rawPreedit, result.inputText, t9FilteredTexts, t9FilteredComments
             )
