@@ -1486,14 +1486,16 @@ static jboolean DoEnsureT9SchemaPatches(
         patch_lines.push_back(
             std::string("  \"t9/isDisplayOriginalPreedit\": ") + preedit_default);
     }
-    // t9_user_translator 占据 translators 首位。
-    // 旧版 t9_date_translator 注入在 @before 0，与新 user 冲突，迁移到 @after 0。
+    // t9_user_translator 已废弃（自造词调频/召回统一走 librime userdb，
+    // 召回由 script_translator 的 UserDictionary 查询承担）：
+    // 不再注入新补丁；老设备 custom.yaml 中的历史注入行必须清除，
+    // 否则运行时每次会话都报 "error creating translator" 并跳过该组件。
+    const bool has_user_translator_patch =
+        existing_content.find("t9_user_translator") != std::string::npos;
+    // 旧版 t9_date_translator 注入在 @before 0（曾与 user translator 抢占
+    // 首位冲突，迁移到 @after 0）。
     const bool legacy_date_before0 =
         existing_content.find("\"engine/translators/@before 0\": t9_date_translator") != std::string::npos;
-    if (schema_content.find("t9_user_translator") == std::string::npos &&
-        existing_content.find("t9_user_translator") == std::string::npos) {
-        patch_lines.push_back("  \"engine/translators/@before 0\": t9_user_translator");
-    }
     if (schema_content.find("t9_date_translator") == std::string::npos &&
         (existing_content.find("t9_date_translator") == std::string::npos ||
          legacy_date_before0)) {
@@ -1529,7 +1531,7 @@ static jboolean DoEnsureT9SchemaPatches(
     }
 
     // 无改动 → 仅判断词库是否仍需编译。
-    if (patch_lines.empty() && !need_remove_derive) {
+    if (patch_lines.empty() && !need_remove_derive && !has_user_translator_patch) {
         const bool need_deploy = T9PackTableBinMissing(user_data_dir, actual_pack_name);
         return need_deploy ? JNI_TRUE : JNI_FALSE;
     }
@@ -1542,6 +1544,10 @@ static jboolean DoEnsureT9SchemaPatches(
     // 迁移旧版 translators/@before 0 的 date 行（与 user 冲突）
     if (legacy_date_before0) {
         base = StripLinesContaining(base, {"engine/translators/@before 0"});
+    }
+    // 迁移：清除已废弃 t9_user_translator 的历史注入行（组件已从模块移除）。
+    if (has_user_translator_patch) {
+        base = StripLinesContaining(base, {"t9_user_translator"});
     }
 
     // 剥离末尾 "..." 与空白，使追加的 patch 被 RIME 正常解析。

@@ -35,7 +35,7 @@ class T9DigitUserDict {
                                                  size_t limit);
 
   bool loaded() const { return loaded_; }
-  // 全局 tick（供 T9UserTranslator 计算 present_tick = tick + 1）。
+  // 全局 tick（权重公式 FormulaP 的 present_tick 口径，与 RIME CreateDictEntry 对齐）。
   TickCount tick() const { return core_.tick(); }
 
  private:

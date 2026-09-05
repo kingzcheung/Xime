@@ -5,7 +5,6 @@
 #include "t9_processor.h"
 #include "t9_filter.h"
 #include "t9_date_translator.h"
-#include "t9_user_translator.h"
 
 using namespace rime;
 
@@ -17,9 +16,6 @@ static void rime_t9_initialize() {
     r.Register("t9_processor", new Component<T9Processor>);
     r.Register("t9_filter", new Component<T9Filter>);
     r.Register("t9_date_translator", new Component<T9DateTranslator>);
-    // 九键数字序列用户词召回（按实际输入数字序列召回用户词，
-    // 解决声母简拼组词无法被 pinyin 用户词典召回的问题）。
-    r.Register("t9_user_translator", new Component<T9UserTranslator>);
 }
 
 static void rime_t9_finalize() {

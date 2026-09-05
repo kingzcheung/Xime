@@ -66,7 +66,7 @@ if(T9_BUILD_TESTS)
     # 排除 t9_processor.cc / t9_module.cc（依赖 RIME Context/Menu/Candidate 等）
     # t9_filter.cc 保留：通过 T9_ALGO_ONLY_BUILD 编译守卫，仅编译 converter 部分（无 RIME 依赖）
     file(GLOB T9_ALGO_SRC CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cc)
-    list(FILTER T9_ALGO_SRC EXCLUDE REGEX "t9_processor\\.cc$|t9_module\\.cc$|t9_date_translator\\.cc$|t9_user_translator\\.cc$|t9_digit_userdict\\.cc$")
+    list(FILTER T9_ALGO_SRC EXCLUDE REGEX "t9_processor\\.cc$|t9_module\\.cc$|t9_date_translator\\.cc$|t9_digit_userdict\\.cc$")
     add_library(t9-algo-objs OBJECT ${T9_ALGO_SRC})
     target_include_directories(t9-algo-objs PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src

@@ -827,9 +827,8 @@ int T9Processor::QueryRimeConsumedDigits(
             // 的候选（如 几股/击鼓 同注释 "ji gu"），避免捕获同注释他词的码。
             // text 为空（兼容/异常兜底）时退化为仅按注释匹配的旧行为。
             if (match_text && genuine->text() != candidate_text) continue;
-            // T9 用户词识别：候选 type=="t9_user"（T9UserTranslator 召回，
-            // SimpleCandidate，非 RIME Phrase）。其 input_digits 即组词时实际
-            // 输入序列（如 4482:j），右选时应全量消费 unassigned。
+            // T9 用户词识别：候选 type=="t9_user"（历史遗留类型，
+            // t9_user_translator 已移除后正常候选不会再命中；防御性保留）。
             if (out_is_t9_user) *out_is_t9_user = (genuine->type() == "t9_user");
             // 顺带捕获 Phrase 的真实码（含声调真相），供调频保留声调。
             if (captured_code || captured_text) {
