@@ -46,6 +46,9 @@ internal fun rememberImeKeyboardCallbacks(
             onCandidateSelect = { index ->
                 service.keyRouter.selectCandidate(index)
             },
+            onCandidateDelete = { index ->
+                service.keyRouter.deleteCandidate(index)
+            },
             onAssociationSelect = { index ->
                 service.feedbackManager.performKeyPressEffect(view = view)
                 val cs = service.candidateState.value

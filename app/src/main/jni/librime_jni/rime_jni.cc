@@ -401,6 +401,14 @@ public:
         if (!rime || !session_id_) return false;
         return rime->select_candidate_on_current_page(session_id_, index);
     }
+
+    // 删除当前页候选（标准 C API delete_candidate_on_current_page）：
+    // librime 对 Phrase 候选执行 userdb tombstone（UpdateEntry -1），
+    // 即自造词/调频词删除；非用户词由 rime 侧自行判定，无副作用。
+    bool deleteCandidateOnCurrentPage(int index) {
+        if (!rime || !session_id_) return false;
+        return rime->delete_candidate_on_current_page(session_id_, index);
+    }
     
     bool pageDown() {
         if (!rime || !session_id_) return false;
@@ -1234,6 +1242,17 @@ Java_com_kingzcheung_xime_rime_RimeEngine_nativeSelectCandidate(
     jint index
 ) {
     return Rime::Instance().selectCandidate(index) ? JNI_TRUE : JNI_FALSE;
+}
+
+// 删除当前页候选（长按候选栏删除自造词）：标准 C API
+// delete_candidate_on_current_page，index 为当前页内索引。
+JNIEXPORT jboolean JNICALL
+Java_com_kingzcheung_xime_rime_RimeEngine_nativeDeleteCandidateOnCurrentPage(
+    JNIEnv* env,
+    jobject thiz,
+    jint index
+) {
+    return Rime::Instance().deleteCandidateOnCurrentPage(index) ? JNI_TRUE : JNI_FALSE;
 }
 
 // 翻页 - 下一页

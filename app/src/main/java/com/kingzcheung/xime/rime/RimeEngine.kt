@@ -339,6 +339,19 @@ class RimeEngine {
         }
     }
 
+    /**
+     * 删除当前页候选（长按候选栏删除自造词）。
+     * 标准 C API delete_candidate_on_current_page：librime 对用户词典词条
+     * 执行 tombstone 标记（UpdateEntry -1），键盘无关（T9/全键盘通用）。
+     * @param index 当前页内的候选索引
+     */
+    fun deleteCandidateOnCurrentPage(index: Int): Boolean {
+        return tryLocked(false) {
+            if (!nativeHasSession()) return@tryLocked false
+            nativeDeleteCandidateOnCurrentPage(index)
+        }
+    }
+
     fun pageDown(): Boolean {
         return tryLocked(false) {
             if (!nativeHasSession()) return@tryLocked false
@@ -632,6 +645,7 @@ class RimeEngine {
     private external fun nativeGetInput(): String?
     private external fun nativeGetComposition(): RimeComposition
     private external fun nativeSelectCandidate(index: Int): Boolean
+    private external fun nativeDeleteCandidateOnCurrentPage(index: Int): Boolean
     private external fun nativePageDown(): Boolean
     private external fun nativePageUp(): Boolean
     private external fun nativeHasNextPage(): Boolean

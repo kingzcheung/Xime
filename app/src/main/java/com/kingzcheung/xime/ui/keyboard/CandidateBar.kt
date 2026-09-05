@@ -2,8 +2,10 @@ package com.kingzcheung.xime.ui.keyboard
 
 import com.kingzcheung.xime.service.PredictionManager
 import android.annotation.SuppressLint
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -94,7 +96,10 @@ data class CandidateBarCallbacks(
     val onShowMoreCandidates: (() -> Unit)? = null,
     val onClearAssociation: (() -> Unit)? = null,
     val onInputTextClick: (() -> Unit)? = null,
-    val onAssociationSelect: ((Int) -> Unit)? = null
+    val onAssociationSelect: ((Int) -> Unit)? = null,
+    // 长按候选：抛事件给宿主（键盘视图内弹确认覆盖层，不弹独立窗口——
+    // 焦点型弹窗会抢焦点导致 IME 被系统收起）。
+    val onCandidateLongPress: ((Int) -> Unit)? = null
 )
 
 @Composable
@@ -399,6 +404,9 @@ fun CandidateBar(
                         text = candidate,
                         index = index,
                         onClick = { callbacks.onCandidateSelect(index) },
+                        onLongClick = if (callbacks.onCandidateLongPress != null) {
+                            { callbacks.onCandidateLongPress(index) }
+                        } else null,
                         textColor = visuals.textColor,
                         comment = if (showComments) {
                             when (val s = state) {
@@ -601,6 +609,7 @@ fun CandidateBar(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun CandidateItem(
     text: String,
@@ -615,6 +624,7 @@ fun CandidateItem(
     fontSize: androidx.compose.ui.unit.TextUnit = 19.sp,
     candidateFontFamily: androidx.compose.ui.text.font.FontFamily = androidx.compose.ui.text.font.FontFamily.Default,
     commentFontFamily: androidx.compose.ui.text.font.FontFamily = androidx.compose.ui.text.font.FontFamily.Default,
+    onLongClick: (() -> Unit)? = null,
 ) {
     Row(
         modifier = modifier
@@ -623,7 +633,10 @@ fun CandidateItem(
                 if (isSelected) accentColor.copy(alpha = 0.2f)
                 else Color.Transparent
             )
-            .clickable(onClick = onClick)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
             .padding(horizontal = 4.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
