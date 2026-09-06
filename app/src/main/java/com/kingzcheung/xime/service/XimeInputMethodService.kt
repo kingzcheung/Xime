@@ -1361,6 +1361,7 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
                             }
                             val callbacks = rememberImeKeyboardCallbacks(this@XimeInputMethodService, floatingMinY, state, effectiveScreenH)
                             keyboardCallbacks = callbacks
+                            val hapticView = LocalView.current
                             KeyboardView(
                                 viewModel = keyboardViewModel,
                                 state = kbState,
@@ -1369,6 +1370,9 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
                                 voiceSpectrumState = this@XimeInputMethodService.voiceSpectrumState,
                                 callbacks = callbacks,
                                 inlineSuggestions = inlineSuggestionManager?.suggestions.orEmpty(),
+                                // 非按键交互（符号/表情面板、菜单栏、候选栏按钮）的振动，
+                                // 语义与按键按下反馈完全一致（模式/时长/振幅走同一配置）
+                                onHapticFeedback = { feedbackManager.hapticFeedback(hapticView) },
                                 onCardPositioned = { _: Int, top: Int, _: Int, bottom: Int ->
                                     val cardHeightPx = bottom - top
                                     if (cardHeightPx > 0) {

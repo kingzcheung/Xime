@@ -67,7 +67,9 @@ fun EmojiKeyboardLayout(
     textColor: Color,
     accentColor: Color,
     bottomPaddingDp: Int = 0,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** 分类 tab 切换的振动钩子（emoji 点击/删除经 onEmojiSelect 由调用方统一振动）。 */
+    onHapticFeedback: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val clipboardManager = remember { ClipboardManager.getInstance(context) }
@@ -196,6 +198,7 @@ fun EmojiKeyboardLayout(
                                     else Color.Transparent
                                 )
                                 .clickable {
+                                    onHapticFeedback?.invoke()
                                     selectedTopTabIndex = 0
                                     selectedSubCategoryIndex = 0
                                 }
@@ -221,6 +224,7 @@ fun EmojiKeyboardLayout(
                                         else Color.Transparent
                                     )
                                     .clickable {
+                                        onHapticFeedback?.invoke()
                                         selectedTopTabIndex = index + 1
                                         selectedSubCategoryIndex = 0
                                     }
@@ -437,7 +441,10 @@ fun EmojiKeyboardLayout(
                                 icon = category.name,
                                 pluginIcon = null,
                                 isSelected = index == selectedSubCategoryIndex,
-                                onClick = { selectedSubCategoryIndex = index },
+                                onClick = {
+                                    onHapticFeedback?.invoke()
+                                    selectedSubCategoryIndex = index
+                                },
                                 backgroundColor = backgroundColor,
                                 textColor = textColor,
                                 selectedBackgroundColor = accentColor,
@@ -448,7 +455,10 @@ fun EmojiKeyboardLayout(
                                 icon = category.icon,
                                 pluginIcon = category.pluginIcon,
                                 isSelected = index == selectedSubCategoryIndex,
-                                onClick = { selectedSubCategoryIndex = index },
+                                onClick = {
+                                    onHapticFeedback?.invoke()
+                                    selectedSubCategoryIndex = index
+                                },
                                 backgroundColor = backgroundColor,
                                 textColor = textColor,
                                 selectedBackgroundColor = accentColor,
