@@ -25,7 +25,8 @@ import java.util.zip.ZipInputStream
  * - `_xime_backup/plugins/<pluginId>/…`             插件包（仅完整备份，包体可能数 MB）
  *
  * 恢复后：rime 文件重启输入会话生效；插件/设置在重启应用后生效（插件随 Application 重建加载）。
- * 注意：userdb 为 leveldb，运行中快照与 WebDAV 同步存在同样的一致性风险，建议空闲时备份。
+ * 注意：userdb 为 leveldb，运行中打快照存在一致性风险（文件级覆盖合并），
+ * 建议在非输入状态执行备份/恢复。
  */
 object BackupManager {
 
