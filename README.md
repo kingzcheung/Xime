@@ -114,6 +114,11 @@ For the full plugin list, see the [Plugin Center](https://ime.ximei.me/plugin-li
 
 For detailed documentation, visit [https://ime.ximei.me](https://ime.ximei.me).
 
+- [FAQ](https://ime.ximei.me/faq.html)
+- [Rime Schemas List](https://ime.ximei.me/rime-list.html)
+- [Plugin List](https://ime.ximei.me/plugin-list.html)
+- [AI Models List](https://ime.ximei.me/model-list.html)
+
 ## Building
 
 ```bash
@@ -126,25 +131,6 @@ git submodule update --init --recursive
 # Build Release APK
 ./gradlew assembleRelease
 ```
-
-### AI Model Download
-
-#### Predictive Text Model
-
-- **Repository**: https://github.com/ximeiorg/predictive-text
-- **Model**: https://www.modelscope.cn/models/bikeand/predictive-text-small
-- **File**: `model_int8_dynamic.onnx` (~17MB)
-- **Vocabulary**: `vocab.json`
-- **Location**: `filesDir/` (app private directory root)
-- **Function**: Transformer-based Chinese word prediction for intelligent candidate suggestions
-
-#### Speech Recognition Model
-
-- **Model**: https://www.modelscope.cn/models/bikeand/asr
-- **File**: `sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30.tar.bz2` (~132MB)
-- **Function**: Streaming zipformer2 Chinese speech recognition (offline, on-device)
-
-**Note**: All models can be downloaded directly from within the app (Settings > Smart Prediction / Speech Recognition) — no manual placement required.
 
 ## Tech Stack
 
