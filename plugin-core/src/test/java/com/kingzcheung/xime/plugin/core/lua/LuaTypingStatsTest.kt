@@ -33,9 +33,11 @@ class LuaTypingStatsTest {
     private class MockCrypto : CryptoHostApi {
         override fun sha256(data: ByteArray): ByteArray = ByteArray(32)
         override fun hmacSha256(key: ByteArray, data: ByteArray): ByteArray = ByteArray(32)
+        override fun hmacSha1(key: ByteArray, data: ByteArray): ByteArray = ByteArray(20)
         override fun hex(data: ByteArray): String = ""
         override fun base64(data: ByteArray): String = ""
         override fun utcTime(format: String): String = "20260828"
+        override fun epochSeconds(): Long = 1767225600
     }
 
     private fun newRuntime(store: PluginConfigStore): LuaScriptRuntime {
