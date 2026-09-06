@@ -92,6 +92,12 @@ fun KeyboardView(
     candidateState: State<CandidateState> = remember { mutableStateOf(CandidateState()) },
     voiceAmplitudeState: State<Float> = remember { mutableFloatStateOf(0f) },
     voiceSpectrumState: State<FloatArray> = remember { mutableStateOf(FloatArray(16)) },
+    /**
+     * 非按键交互（符号/表情面板、菜单栏、候选栏按钮等）的振动钩子。
+     * 按键本身的反馈走 onKeyPressDown 回调（服务层 FeedbackManager），
+     * 此处只覆盖没有经过按键回调链路的点击交互，宿主按按键振动同款语义实现。
+     */
+    onHapticFeedback: (() -> Unit)? = null,
 ) {
     val isShifted by viewModel.isShifted.collectAsStateWithLifecycle()
     val keyboardState by viewModel.keyboardState.collectAsStateWithLifecycle()
@@ -380,7 +386,10 @@ fun KeyboardView(
                             }
                         })
                     }
-                    ToolbarAction(item, onClick)
+                    ToolbarAction(item) {
+                        onHapticFeedback?.invoke()
+                        onClick()
+                    }
                 },
                 visuals = CandidateBarVisuals(
                     backgroundColor = Color.Transparent,
@@ -422,6 +431,7 @@ fun KeyboardView(
                         deletePendingIndex = index
                     },
                     onClearAssociation = {
+                        onHapticFeedback?.invoke()
                         if (showHandwritingCandidates) {
                             handwritingCandidates = emptyList()
                             handwritingComments = emptyList()
@@ -432,6 +442,7 @@ fun KeyboardView(
                     },
                     onLogoClick = { viewModel.showOverlay(OverlayRoute.Menu) },
                     onBack = {
+                        onHapticFeedback?.invoke()
                         if (showHandwritingCandidates) {
                             handwritingCandidates = emptyList()
                             handwritingComments = emptyList()
@@ -449,10 +460,14 @@ fun KeyboardView(
                         }
                     },
                     onHideKeyboard = {
+                        onHapticFeedback?.invoke()
                         callbacks.onHideKeyboard?.invoke()
                         viewModel.resetKeyboard(state.isAsciiMode, state.currentSchemaId)
                     },
-                    onShowMoreCandidates = { viewModel.showOverlay(OverlayRoute.CandidatePage) },
+                    onShowMoreCandidates = {
+                        onHapticFeedback?.invoke()
+                        viewModel.showOverlay(OverlayRoute.CandidatePage)
+                    },
                     onInputTextClick = {
                         if (candidateState.value.inputText.isNotEmpty()) {
                             callbacks.onClipboardSelect?.invoke(candidateState.value.inputText)
@@ -1034,11 +1049,15 @@ fun KeyboardView(
                             horizontalArrangement = Arrangement.End,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            TextButton(onClick = { deletePendingIndex = null }) {
+                            TextButton(onClick = {
+                                onHapticFeedback?.invoke()
+                                deletePendingIndex = null
+                            }) {
                                 Text("取消", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             Spacer(Modifier.width(4.dp))
                             TextButton(onClick = {
+                                onHapticFeedback?.invoke()
                                 deletePendingIndex = null
                                 callbacks.onCandidateDelete?.invoke(deleteIndex)
                             }) {
@@ -1074,18 +1093,18 @@ fun KeyboardView(
                             schemaSwitches = state.schemaSwitches,
                         ),
                         callbacks = MenuBarCallbacks(
-                            onDismiss = { viewModel.closeOverlay() },
-                            onClipboard = { viewModel.showOverlay(OverlayRoute.Clipboard(0)); callbacks.onClipboard?.invoke() },
-                            onQuickSend = { viewModel.showOverlay(OverlayRoute.Clipboard(1)); callbacks.onQuickSend?.invoke() },
-                            onKeyboardResize = { callbacks.onKeyboardResize?.invoke(); viewModel.closeOverlay() },
-                            onEmoji = { viewModel.showOverlay(OverlayRoute.Emoji) },
-                            onReloadConfig = { callbacks.onReloadConfig?.invoke(); viewModel.closeOverlay() },
-                            onSettings = { callbacks.onSettings?.invoke(); viewModel.closeOverlay() },
-                            onSchemaList = { viewModel.pushOverlay(OverlayRoute.SchemaList) },
-                            onToggleDarkMode = { callbacks.onToggleDarkMode?.invoke() },
-                            onToolbarCustomize = { viewModel.showOverlay(OverlayRoute.ToolbarCustomize) },
-                            onFloatingModeToggle = { callbacks.onFloatingModeChange?.invoke(!state.isFloatingMode); viewModel.closeOverlay() },
-                            onToggleSchemaSwitch = { sw -> callbacks.onToggleSchemaSwitch?.invoke(sw); viewModel.closeOverlay() },
+                            onDismiss = { onHapticFeedback?.invoke(); viewModel.closeOverlay() },
+                            onClipboard = { onHapticFeedback?.invoke(); viewModel.showOverlay(OverlayRoute.Clipboard(0)); callbacks.onClipboard?.invoke() },
+                            onQuickSend = { onHapticFeedback?.invoke(); viewModel.showOverlay(OverlayRoute.Clipboard(1)); callbacks.onQuickSend?.invoke() },
+                            onKeyboardResize = { onHapticFeedback?.invoke(); callbacks.onKeyboardResize?.invoke(); viewModel.closeOverlay() },
+                            onEmoji = { onHapticFeedback?.invoke(); viewModel.showOverlay(OverlayRoute.Emoji) },
+                            onReloadConfig = { onHapticFeedback?.invoke(); callbacks.onReloadConfig?.invoke(); viewModel.closeOverlay() },
+                            onSettings = { onHapticFeedback?.invoke(); callbacks.onSettings?.invoke(); viewModel.closeOverlay() },
+                            onSchemaList = { onHapticFeedback?.invoke(); viewModel.pushOverlay(OverlayRoute.SchemaList) },
+                            onToggleDarkMode = { onHapticFeedback?.invoke(); callbacks.onToggleDarkMode?.invoke() },
+                            onToolbarCustomize = { onHapticFeedback?.invoke(); viewModel.showOverlay(OverlayRoute.ToolbarCustomize) },
+                            onFloatingModeToggle = { onHapticFeedback?.invoke(); callbacks.onFloatingModeChange?.invoke(!state.isFloatingMode); viewModel.closeOverlay() },
+                            onToggleSchemaSwitch = { sw -> onHapticFeedback?.invoke(); callbacks.onToggleSchemaSwitch?.invoke(sw); viewModel.closeOverlay() },
                         ),
                         modifier = Modifier.fillMaxWidth().fillMaxHeight()
                     )
@@ -1164,6 +1183,7 @@ fun KeyboardView(
                     }
                     is OverlayRoute.Emoji -> EmojiKeyboardLayout(
                         onEmojiSelect = { emoji ->
+                            onHapticFeedback?.invoke()
                             if (emoji == "delete") {
                                 callbacks.onKeyPress("delete", false)
                             } else {
@@ -1176,10 +1196,12 @@ fun KeyboardView(
                         textColor = keyTextColor,
                         accentColor = accentColor,
                         bottomPaddingDp = state.keyboardBottomPaddingDp,
-                        modifier = Modifier.fillMaxWidth().fillMaxHeight()
+                        modifier = Modifier.fillMaxWidth().fillMaxHeight(),
+                        onHapticFeedback = onHapticFeedback,
                     )
                     is OverlayRoute.Symbol -> SymbolKeyboardLayout(
                         onSelect = { symbol ->
+                            onHapticFeedback?.invoke()
                             if (symbol == "delete") {
                                 callbacks.onKeyPress("delete", false)
                             } else {
@@ -1192,7 +1214,8 @@ fun KeyboardView(
                         accentColor = accentColor,
                         keyBgColor = keyBgColor,
                         bottomPaddingDp = state.keyboardBottomPaddingDp,
-                        modifier = Modifier.fillMaxWidth().fillMaxHeight()
+                        modifier = Modifier.fillMaxWidth().fillMaxHeight(),
+                        onHapticFeedback = onHapticFeedback,
                     )
                     is OverlayRoute.CandidatePage -> CandidatePage(
                         state = CandidatePageState(
@@ -1214,8 +1237,8 @@ fun KeyboardView(
                                 callbacks.onAssociationSelect?.invoke(index)
                                 viewModel.closeOverlay()
                             },
-                            onPageDown = callbacks.onPageDown,
-                            onPageUp = callbacks.onPageUp,
+                            onPageDown = { onHapticFeedback?.invoke(); callbacks.onPageDown?.invoke() },
+                            onPageUp = { onHapticFeedback?.invoke(); callbacks.onPageUp?.invoke() },
                             onBack = { viewModel.closeOverlay() },
                         ),
                         modifier = Modifier.fillMaxWidth().fillMaxHeight()

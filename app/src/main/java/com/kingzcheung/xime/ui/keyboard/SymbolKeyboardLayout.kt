@@ -57,7 +57,9 @@ fun SymbolKeyboardLayout(
     accentColor: Color,
     keyBgColor: Color,
     bottomPaddingDp: Int = 0,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** 分类 tab 切换与返回按钮的振动钩子（符号点击/删除经 onSelect 由调用方统一振动）。 */
+    onHapticFeedback: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     // 最近使用（LRU）：作为第一个分类页，点击符号时置顶记录
@@ -101,7 +103,10 @@ fun SymbolKeyboardLayout(
                     .size(28.dp)
                     .clip(CircleShape)
                     .background(iconButtonContainer)
-                    .clickable { onBack() },
+                    .clickable {
+                        onHapticFeedback?.invoke()
+                        onBack()
+                    },
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
@@ -193,7 +198,10 @@ fun SymbolKeyboardLayout(
                     SymbolCategoryTab(
                         name = category.name,
                         isSelected = index == pagerState.currentPage,
-                        onClick = { scope.launch { pagerState.animateScrollToPage(index) } },
+                        onClick = {
+                            onHapticFeedback?.invoke()
+                            scope.launch { pagerState.animateScrollToPage(index) }
+                        },
                         backgroundColor = backgroundColor,
                         textColor = textColor,
                         selectedBackgroundColor = accentColor
