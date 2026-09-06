@@ -44,7 +44,6 @@ fun SettingsScreen(
                 onNavigateToSmartPrediction = { navController.navigate(SettingsRoutes.SmartPrediction) },
                 onNavigateToSpeechToText = { navController.navigate(SettingsRoutes.SpeechToText) },
                 onNavigateToAbout = { navController.navigate(SettingsRoutes.About) },
-                onNavigateToWebDav = { navController.navigate(SettingsRoutes.WebDav) },
                 onNavigateToClipboardSync = { navController.navigate(SettingsRoutes.ClipboardSync) },
                 onNavigateToBackup = { navController.navigate(SettingsRoutes.Backup) }
             )
@@ -191,11 +190,6 @@ fun SettingsScreen(
         }
         composable(SettingsRoutes.RimeFileBrowser) {
             RimeFileBrowserContent(
-                onBack = { navController.popBackStack() }
-            )
-        }
-        composable(SettingsRoutes.WebDav) {
-            WebDavSyncContent(
                 onBack = { navController.popBackStack() }
             )
         }

@@ -80,7 +80,6 @@ fun SettingsMainContent(
     onNavigateToSmartPrediction: () -> Unit,
     onNavigateToSpeechToText: () -> Unit,
     onNavigateToAbout: () -> Unit,
-    onNavigateToWebDav: () -> Unit = {},
     onNavigateToClipboardSync: () -> Unit = {},
     onNavigateToBackup: () -> Unit = {}
 ) {
@@ -335,13 +334,6 @@ fun SettingsMainContent(
 
             item {
                 SettingsSection(                title = "同步与备份", content = {
-                    SettingsItem(
-                        icon = Icons.TwoTone.CloudSync,
-                        title = "WebDAV 同步",
-                        subtitle = "通过 WebDAV 备份和恢复输入方案与配置",
-                        onClick = onNavigateToWebDav,
-                        showArrow = true
-                    )
                     SettingsItem(
                         icon = Icons.TwoTone.Backup,
                         title = "云备份",
