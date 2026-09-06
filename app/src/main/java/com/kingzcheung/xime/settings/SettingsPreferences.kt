@@ -664,4 +664,14 @@ object SettingsPreferences {
     fun setClipboardSyncPluginId(context: Context, pluginId: String) {
         getPrefs(context).edit().putString(KEY_CLIPBOARD_SYNC_PLUGIN_ID, pluginId).apply()
     }
+
+    const val KEY_BACKUP_PLUGIN_ID = "backup_plugin_id"
+
+    fun getBackupPluginId(context: Context): String {
+        return getPrefs(context).getString(KEY_BACKUP_PLUGIN_ID, "") ?: ""
+    }
+
+    fun setBackupPluginId(context: Context, pluginId: String) {
+        getPrefs(context).edit().putString(KEY_BACKUP_PLUGIN_ID, pluginId).apply()
+    }
 }

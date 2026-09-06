@@ -242,6 +242,9 @@ class XmlManager(private val context: Application) {
         cap.clipboardSync?.let {
             root["clipboardSync"] = mapOf("protocols" to it.protocols)
         }
+        cap.backup?.let {
+            root["backup"] = mapOf("protocols" to it.protocols)
+        }
         if (cap.events.isNotEmpty()) {
             root["events"] = cap.events
         }
@@ -289,6 +292,11 @@ class XmlManager(private val context: Application) {
                 },
                 clipboardSync = (root["clipboardSync"] as? Map<*, *>)?.let { m ->
                     com.kingzcheung.xime.plugin.core.model.PluginCapabilities.ClipboardSyncCapabilities(
+                        protocols = (m["protocols"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+                    )
+                },
+                backup = (root["backup"] as? Map<*, *>)?.let { m ->
+                    com.kingzcheung.xime.plugin.core.model.PluginCapabilities.BackupCapabilities(
                         protocols = (m["protocols"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
                     )
                 },

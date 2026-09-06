@@ -73,6 +73,17 @@ package com.kingzcheung.xime.plugin.core.lua.sdk
  * - `host.clipboard.get()` -> string 或 nil（当前剪贴板文本；非文本/空/无权限为 nil）
  *   未声明该能力的插件 `host.clipboard` 为 nil。
  *
+ * ### backup 备份（manifest.type = backup，capabilities.backup 声明协议）
+ * 宿主负责备份包的生成（zip）与恢复（校验落盘），插件只承载传输协议，
+ * 用 `host.http` + `host.crypto` 实现，服务器配置由 getSettingsSchema 表单承载：
+ * - `pushBackup(args)` -> { ok: bool, id?: string, message?: string } 或 bool
+ *   `args`: { name: string（建议的远端文件名）, archive: string（zip 二进制字节流） }
+ * - `pullBackup(id)` -> string（zip 二进制字节流）或 nil（失败）
+ * - `listBackups()` -> { { id: string, name: string, createdAt?: int, size?: int }, ... } 或 nil
+ *   按 createdAt 倒序返回；id 为远端标识（路径/key），恢复与删除时原样回传
+ * - `deleteBackup(id)` -> bool
+ * - `testConnection()` -> string（错误消息）或 nil（成功）
+ *
  * ## 数据格式
  * Lua 返回值一律使用 Lua table（数组或 map），宿主统一做 table -> Kotlin 转换；
  * 函数不存在或抛错时，宿主返回空结果（不崩溃）。
@@ -112,6 +123,12 @@ object LuaPluginContract {
     const val FN_ON_PANEL_INPUT = "onPanelInput"
     const val FN_ON_PANEL_ACTION = "onPanelAction"
     const val FN_ON_PANEL_ITEM_CLICK = "onPanelItemClick"
+
+    // ---- backup（manifest capabilities.backup 声明协议后由备份设置页调用） ----
+    const val FN_PUSH_BACKUP = "pushBackup"
+    const val FN_PULL_BACKUP = "pullBackup"
+    const val FN_LIST_BACKUPS = "listBackups"
+    const val FN_DELETE_BACKUP = "deleteBackup"
 
     // ---- emoji item 字段 ----
     const val FIELD_ID = "id"

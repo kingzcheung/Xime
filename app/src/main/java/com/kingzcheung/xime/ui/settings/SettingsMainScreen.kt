@@ -21,6 +21,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.twotone.LibraryBooks
 import androidx.compose.material.icons.twotone.AutoAwesome
+import androidx.compose.material.icons.twotone.Backup
 import androidx.compose.material.icons.twotone.Ballot
 
 import androidx.compose.material.icons.twotone.Build
@@ -80,7 +81,8 @@ fun SettingsMainContent(
     onNavigateToSpeechToText: () -> Unit,
     onNavigateToAbout: () -> Unit,
     onNavigateToWebDav: () -> Unit = {},
-    onNavigateToClipboardSync: () -> Unit = {}
+    onNavigateToClipboardSync: () -> Unit = {},
+    onNavigateToBackup: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
@@ -338,6 +340,13 @@ fun SettingsMainContent(
                         title = "WebDAV 同步",
                         subtitle = "通过 WebDAV 备份和恢复输入方案与配置",
                         onClick = onNavigateToWebDav,
+                        showArrow = true
+                    )
+                    SettingsItem(
+                        icon = Icons.TwoTone.Backup,
+                        title = "云备份",
+                        subtitle = "通过备份插件将配置备份到云端并恢复",
+                        onClick = onNavigateToBackup,
                         showArrow = true
                     )
                     SettingsItem(

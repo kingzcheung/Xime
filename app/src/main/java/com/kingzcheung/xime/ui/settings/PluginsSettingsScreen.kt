@@ -33,6 +33,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AddBox
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.AutoFixHigh
+import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Face
@@ -107,7 +108,8 @@ fun PluginsSettingsContent(
     onNavigateToPluginSettings: (String) -> Unit = {},
     onNavigateToPluginMarketDetail: (String) -> Unit = {},
     onNavigateToSpeechToText: () -> Unit = {},
-    onNavigateToClipboardSync: () -> Unit = {}
+    onNavigateToClipboardSync: () -> Unit = {},
+    onNavigateToBackup: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val viewModel: PluginsSettingsViewModel = viewModel()
@@ -276,11 +278,14 @@ fun PluginsSettingsContent(
                                     extension.id == activeAsrPluginId
                                 PluginCategory.CLIPBOARD_SYNC ->
                                     extension.id == activeClipboardSyncPluginId
+                                PluginCategory.BACKUP ->
+                                    extension.id == SettingsPreferences.getBackupPluginId(context)
                                 else -> false
                             },
                             onActivate = when (extension.category) {
                                 PluginCategory.ASR -> onNavigateToSpeechToText
                                 PluginCategory.CLIPBOARD_SYNC -> onNavigateToClipboardSync
+                                PluginCategory.BACKUP -> onNavigateToBackup
                                 else -> null
                             }
                         )
@@ -868,6 +873,7 @@ private fun getCategoryIcon(category: PluginCategory): ImageVector = when (categ
     PluginCategory.ASR -> Icons.Default.Mic
     PluginCategory.PREDICTION -> Icons.Default.AutoAwesome
     PluginCategory.CLIPBOARD_SYNC -> Icons.Default.Sync
+    PluginCategory.BACKUP -> Icons.Default.Backup
     PluginCategory.TOOL -> Icons.Default.AutoFixHigh
     PluginCategory.UNKNOWN -> Icons.Default.Extension
 }

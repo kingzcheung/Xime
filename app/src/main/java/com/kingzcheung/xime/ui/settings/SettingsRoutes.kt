@@ -25,6 +25,7 @@ object SettingsRoutes {
     const val HandwritingCapture = "handwriting_capture"
     const val WebDav = "webdav"
     const val ClipboardSync = "clipboard_sync"
+    const val Backup = "backup"
     const val SchemaDictBrowser = "schema_dict_browser"
     const val RimeFileBrowser = "rime_file_browser"
 }

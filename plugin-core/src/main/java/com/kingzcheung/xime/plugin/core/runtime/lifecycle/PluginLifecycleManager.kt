@@ -4,6 +4,7 @@ import android.app.Application
 import android.util.Log
 import com.kingzcheung.xime.plugin.core.api.IPluginEntryClass
 import com.kingzcheung.xime.plugin.core.lua.LuaAsrPluginAdapter
+import com.kingzcheung.xime.plugin.core.lua.LuaBackupPluginAdapter
 import com.kingzcheung.xime.plugin.core.lua.LuaClipboardSyncPluginAdapter
 import com.kingzcheung.xime.plugin.core.lua.LuaEmojiPluginAdapter
 import com.kingzcheung.xime.plugin.core.lua.LuaPluginAdapter
@@ -195,6 +196,11 @@ class PluginLifecycleManager(
                     )
                 PluginCategory.CLIPBOARD_SYNC ->
                     LuaClipboardSyncPluginAdapter(
+                        runtime = loadedPlugin.script ?: return null,
+                        pluginContext = pluginContext
+                    )
+                PluginCategory.BACKUP ->
+                    LuaBackupPluginAdapter(
                         runtime = loadedPlugin.script ?: return null,
                         pluginContext = pluginContext
                     )
