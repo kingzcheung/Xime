@@ -121,6 +121,11 @@
 
 詳細使用說明請檢視 [使用文件](https://ime.ximei.me)。
 
+- [常見問題 FAQ](https://ime.ximei.me/faq.html)
+- [Rime 方案列表](https://ime.ximei.me/rime-list.html)
+- [外掛列表](https://ime.ximei.me/plugin-list.html)
+- [AI 模型列表](https://ime.ximei.me/model-list.html)
+
 ## 構建
 
 ```bash
@@ -133,25 +138,6 @@ git submodule update --init --recursive
 # 構建 Release APK
 ./gradlew assembleRelease
 ```
-
-### AI 模型下載
-
-#### 智慧聯想詞模型
-
-- **專案地址**: https://github.com/ximeiorg/predictive-text
-- **模型下載**: https://www.modelscope.cn/models/bikeand/predictive-text-small
-- **模型檔案**: `model_int8_dynamic.onnx`（約 17MB）
-- **詞表檔案**: `vocab.json`
-- **存放位置**: `filesDir/` 目錄（即應用私有目錄根目錄）
-- **功能**: 基於 Transformer 的中文聯想詞預測，提供智慧候選詞推薦
-
-#### 語音辨識模型
-
-- **模型下載**: https://www.modelscope.cn/models/bikeand/asr
-- **模型檔案**: `sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30.tar.bz2`（約 132MB）
-- **功能**: 串流 zipformer2 中文語音辨識（本地離線執行）
-
-**注意**: 所有模型均可直接在應用程式內「設定 > 智慧聯想/語音辨識」頁面下載，無需手動放置。
 
 ## 技術棧
 
