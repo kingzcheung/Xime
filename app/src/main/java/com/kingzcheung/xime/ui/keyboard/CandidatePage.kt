@@ -2,6 +2,8 @@ package com.kingzcheung.xime.ui.keyboard
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,10 +32,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -183,11 +190,28 @@ fun CandidatePage(
                 .padding(horizontal = 8.dp)
         ) { page ->
             if (page == centerPage) {
+                // 候选条目点击与外层 verticalScroll 存在手势竞争：按下后轻微位移超过
+                // touch slop 即被判定为滚动，点击被静默取消（无任何反馈）。部分 ROM
+                // （如鸿蒙）的 slop/触摸采样更敏感，表现为"偶尔点击候选无反应"。
+                // 内容不超高时彻底禁用滚动容器，保证点击稳定命中；超高时仍可滚动。
+                var viewportHeight by remember { mutableStateOf(0) }
+                var contentHeight by remember { mutableStateOf(0) }
+                val scrollState = rememberScrollState()
                 Column(
                     modifier = Modifier
-                        .verticalScroll(rememberScrollState())
+                        .fillMaxWidth()
+                        .onSizeChanged { viewportHeight = it.height }
+                        .verticalScroll(
+                            scrollState,
+                            enabled = viewportHeight > 0 && contentHeight > viewportHeight
+                        )
                 ) {
-                    if (state.candidates.isNotEmpty()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .onSizeChanged { contentHeight = it.height }
+                    ) {
+                        if (state.candidates.isNotEmpty()) {
                         FlowRow(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -226,6 +250,7 @@ fun CandidatePage(
                             }
                         }
                     }
+                    }
                 }
             }
         }
@@ -253,11 +278,20 @@ fun CandidatePageItem(
 ) {
     val displayComment = comment.replace("~", "")
 
+    // 按压高亮：与主键盘按键同风格的按下反馈（默认 ripple 在部分主题背景上不可见）
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+
     Row(
 
         modifier = modifier
             .clip(RoundedCornerShape(6.dp))
-            .clickable(onClick = onClick)
+            .background(if (isPressed) textColor.copy(alpha = 0.12f) else Color.Transparent)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick
+            )
             .padding(horizontal = 4.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
