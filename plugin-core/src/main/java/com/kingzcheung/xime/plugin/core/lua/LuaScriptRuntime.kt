@@ -826,6 +826,11 @@ class LuaScriptRuntime(
             val data = luaToBytes(args.arg(2)) ?: return@luaFunction LuaValue.NIL
             LuaString.valueOf(cryptoHostApi?.hmacSha256(key, data) ?: return@luaFunction LuaValue.NIL)
         })
+        crypto.set("hmacSha1", luaFunction { args ->
+            val key = luaToBytes(args.arg1()) ?: return@luaFunction LuaValue.NIL
+            val data = luaToBytes(args.arg(2)) ?: return@luaFunction LuaValue.NIL
+            LuaString.valueOf(cryptoHostApi?.hmacSha1(key, data) ?: return@luaFunction LuaValue.NIL)
+        })
         crypto.set("hex", luaFunction { args ->
             val data = luaToBytes(args.arg1()) ?: return@luaFunction LuaValue.NIL
             CoerceJavaToLua.coerce(cryptoHostApi?.hex(data))
@@ -836,6 +841,9 @@ class LuaScriptRuntime(
         })
         crypto.set("utcTime", luaFunction { args ->
             CoerceJavaToLua.coerce(cryptoHostApi?.utcTime(args.arg1().tojstring()))
+        })
+        crypto.set("epochSeconds", luaFunction { _ ->
+            CoerceJavaToLua.coerce(cryptoHostApi?.epochSeconds() ?: return@luaFunction LuaValue.NIL)
         })
         return crypto
     }

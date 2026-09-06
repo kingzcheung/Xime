@@ -27,6 +27,14 @@ class CryptoHostApiImpl : CryptoHostApi {
         return mac.doFinal(data)
     }
 
+    override fun hmacSha1(key: ByteArray, data: ByteArray): ByteArray {
+        val mac = Mac.getInstance("HmacSHA1")
+        mac.init(SecretKeySpec(key, "HmacSHA1"))
+        return mac.doFinal(data)
+    }
+
+    override fun epochSeconds(): Long = System.currentTimeMillis() / 1000
+
     override fun hex(data: ByteArray): String {
         return data.joinToString("") { "%02x".format(it) }
     }

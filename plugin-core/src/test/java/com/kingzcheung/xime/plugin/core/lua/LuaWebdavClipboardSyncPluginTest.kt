@@ -52,10 +52,12 @@ class LuaWebdavClipboardSyncPluginTest {
     private class MockCryptoHostApi : CryptoHostApi {
         override fun sha256(data: ByteArray): ByteArray = ByteArray(0)
         override fun hmacSha256(key: ByteArray, data: ByteArray): ByteArray = ByteArray(0)
+        override fun hmacSha1(key: ByteArray, data: ByteArray): ByteArray = ByteArray(20)
         override fun hex(data: ByteArray): String = ""
         override fun base64(data: ByteArray): String =
             java.util.Base64.getEncoder().encodeToString(data)
         override fun utcTime(format: String): String = ""
+        override fun epochSeconds(): Long = 1767225600
     }
 
     /** 测试专用宿主 API：log 输出到 stdout（unit test 中 android.util.Log 是 stub）。 */

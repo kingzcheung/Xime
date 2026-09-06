@@ -37,12 +37,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.State
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import com.kingzcheung.xime.settings.KeysConfigHelper
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -524,10 +526,13 @@ private fun T9KeyboardContent(
             ) {
                 val showCandidates = controller.leftPanelState != T9InputController.LeftPanelState.IDLE
                 val currentFirstOptions = controller.firstOptions
+                // 空闲态符号列表来自 xime.yaml keyboard.t9.side_symbols（可自定义，>4 滚动）
+                val configVersion by KeysConfigHelper.configVersion.collectAsState()
+                val t9SideSymbols = remember(configVersion) { KeysConfigHelper.getT9SideSymbols() }
                 val displayItems: List<String> = if (showCandidates) {
                     currentFirstOptions.map { it.pinyin }
                 } else {
-                    listOf("，", "。", "？", "！")
+                    t9SideSymbols
                 }
                 if (displayItems.size <= 4) {
                     Column(
@@ -575,24 +580,40 @@ private fun T9KeyboardContent(
                         modifier = Modifier.fillMaxSize(),
                         verticalArrangement = Arrangement.spacedBy(0.dp)
                     ) {
-                        itemsIndexed(displayItems) { index, _ ->
-                            val option = currentFirstOptions[index]
-                            val isSelected = controller.leftPanelState == T9InputController.LeftPanelState.SELECTION &&
-                                    controller.selectedOption == option &&
-                                    controller.isSelectedOptionInCurrentCandidates()
-                            CandidateItem(
-                                text = option.pinyin,
-                                onClick = { controller.onChoiceSelected(option) },
-                                onPress = { onKeyPressDown?.invoke(option.pinyin) },
-                                textColor = keyTextColor,
-                                backgroundColor = keyBackgroundColor,
-                                accentColor = accentColor,
-                                fontSize = candidateFontSize,
-                                isSelected = isSelected,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(if (compactMode) 26.dp else 32.dp)
-                            )
+                        itemsIndexed(displayItems) { index, item ->
+                            if (showCandidates) {
+                                val option = currentFirstOptions[index]
+                                val isSelected = controller.leftPanelState == T9InputController.LeftPanelState.SELECTION &&
+                                        controller.selectedOption == option &&
+                                        controller.isSelectedOptionInCurrentCandidates()
+                                CandidateItem(
+                                    text = option.pinyin,
+                                    onClick = { controller.onChoiceSelected(option) },
+                                    onPress = { onKeyPressDown?.invoke(option.pinyin) },
+                                    textColor = keyTextColor,
+                                    backgroundColor = keyBackgroundColor,
+                                    accentColor = accentColor,
+                                    fontSize = candidateFontSize,
+                                    isSelected = isSelected,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(if (compactMode) 26.dp else 32.dp)
+                                )
+                            } else {
+                                CandidateItem(
+                                    text = item,
+                                    onClick = { onKeyPress(item) },
+                                    onPress = { onKeyPressDown?.invoke(item) },
+                                    textColor = keyTextColor,
+                                    backgroundColor = keyBackgroundColor,
+                                    accentColor = accentColor,
+                                    fontSize = candidateFontSize,
+                                    isSelected = false,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(if (compactMode) 26.dp else 32.dp)
+                                )
+                            }
                         }
                     }
                 }
