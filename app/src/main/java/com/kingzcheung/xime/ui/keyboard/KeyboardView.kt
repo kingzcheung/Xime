@@ -1178,6 +1178,10 @@ fun KeyboardView(
                             accentColor = accentColor,
                             keyBgColor = keyBgColor,
                             bottomPaddingDp = state.keyboardBottomPaddingDp,
+                            keyCornerRadius = kbKey.cornerRadius.dp,
+                            shadowEnabled = kbShadow.enabled,
+                            shadowElevation = kbShadow.elevation.dp,
+                            shadowShapeRadius = kbShadow.shapeRadius.dp,
                             modifier = Modifier.fillMaxWidth().fillMaxHeight()
                         )
                     }
