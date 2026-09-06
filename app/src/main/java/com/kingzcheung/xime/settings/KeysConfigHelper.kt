@@ -408,6 +408,14 @@ data class KeyboardFontConfig(
 )
 
 /**
+ * 九键（T9）键盘配置，从 xime.yaml keyboard.t9 加载。
+ */
+data class KeyboardT9Config(
+    /** 左侧快捷符号栏（空闲态），列表长度不限，超过 4 个时键盘侧滚动显示。 */
+    val sideSymbols: List<String>? = null,
+)
+
+/**
  * 部分配置：仅包含 YAML 中显式配置的字段，null = 未配置。
  * 用于 custom → builtIn → 代码默认值的字段级一路 fallback 合并。
  */
@@ -440,6 +448,10 @@ internal data class KeyboardKeyPartial(
     val spacingX: Float? = null,
     val spacingY: Float? = null,
     val spacingOverrides: Map<String, KeyboardSpacingConfig>? = null,
+)
+
+internal data class KeyboardT9Partial(
+    val sideSymbols: List<String>? = null,
 )
 
 /** 字段级一路 fallback：custom → builtIn → 代码默认值。 */
@@ -504,6 +516,9 @@ object KeysConfigHelper {
     private const val TAG = "KeysConfigHelper"
     private const val XIME_CONFIG_FILE = "xime.yaml"
     private const val XIME_CUSTOM_CONFIG_FILE = "xime.custom.yaml"
+
+    /** 九键左侧快捷符号栏内置默认值（T9KeyboardLayout 硬编码的历史行为）。 */
+    val DEFAULT_T9_SIDE_SYMBOLS: List<String> = listOf("，", "。", "？", "！")
     
     private val yaml = Yaml(configuration = YamlConfiguration(strictMode = false))
     
@@ -529,6 +544,9 @@ object KeysConfigHelper {
 
     // 键盘按键配置缓存
     private var keyboardKeyConfig: KeyboardKeyConfig = KeyboardKeyConfig()
+
+    // 九键（T9）键盘配置缓存
+    private var keyboardT9Config: KeyboardT9Config = KeyboardT9Config(sideSymbols = DEFAULT_T9_SIDE_SYMBOLS)
 
     // 字体配置缓存
     private var keyboardFontConfig: KeyboardFontConfig = KeyboardFontConfig()
@@ -588,6 +606,8 @@ object KeysConfigHelper {
             keyboardShadowConfig = parseKeyboardShadowFromAssets(context)
             // 键盘按键（从原始 YAML 手动解析）
             keyboardKeyConfig = parseKeyboardKeyFromAssets(context)
+            // 九键键盘配置（从原始 YAML 手动解析）
+            keyboardT9Config = parseKeyboardT9FromAssets(context)
             // 字体配置（从原始 YAML 手动解析）
             keyboardFontConfig = parseKeyboardFontsFromAssets(context)
             com.kingzcheung.xime.ui.keyboard.AppFonts.loadCustomFonts(keyboardFontConfig)
@@ -892,6 +912,36 @@ object KeysConfigHelper {
             )
         } catch (e: Exception) {
             Log.w(TAG, "Failed to parse keyboard key config", e)
+            null
+        }
+    }
+
+    /** 从 xime.yaml + xime.custom.yaml 合并解析九键键盘配置。 */
+    private fun parseKeyboardT9FromAssets(context: Context): KeyboardT9Config {
+        val builtIn = readAssetText(context, XIME_CONFIG_FILE)
+            ?.let { parseKeyboardT9YamlPartial(it) }
+        val custom = readCustomText(context)?.let { parseKeyboardT9YamlPartial(it) }
+        return mergeT9Configs(custom, builtIn)
+    }
+
+    /** 字段级一路 fallback 合并九键配置：custom → builtIn → 代码默认值。 */
+    internal fun mergeT9Configs(custom: KeyboardT9Partial?, builtIn: KeyboardT9Partial?): KeyboardT9Config =
+        KeyboardT9Config(
+            sideSymbols = tiered(custom?.sideSymbols?.takeIf { it.isNotEmpty() },
+                builtIn?.sideSymbols?.takeIf { it.isNotEmpty() }, DEFAULT_T9_SIDE_SYMBOLS),
+        )
+
+    /** 从 YAML 文本中提取 keyboard.t9 段（仅显式字段非 null）。 */
+    internal fun parseKeyboardT9YamlPartial(yamlText: String): KeyboardT9Partial? {
+        return try {
+            val root = yaml.parseToYamlNode(yamlText) as? YamlMap ?: return null
+            val keyboardNode = root.opt<YamlMap>("keyboard") ?: return null
+            val t9Node = keyboardNode.opt<YamlMap>("t9") ?: return null
+            val sideSymbols = t9Node.opt<YamlList>("side_symbols")
+                ?.items?.mapNotNull { (it as? YamlScalar)?.content }
+            KeyboardT9Partial(sideSymbols = sideSymbols?.ifEmpty { null })
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to parse keyboard t9 config", e)
             null
         }
     }
@@ -1212,6 +1262,10 @@ object KeysConfigHelper {
 
     /** 获取键盘按键配置（从 xime.yaml keyboard.key 加载）。 */
     fun getKeyboardKeyConfig(): KeyboardKeyConfig = keyboardKeyConfig
+
+    /** 获取九键左侧快捷符号栏配置（xime.custom.yaml → xime.yaml → 内置默认值）。 */
+    fun getT9SideSymbols(): List<String> =
+        keyboardT9Config.sideSymbols ?: DEFAULT_T9_SIDE_SYMBOLS
 
     /** 获取某个按键的手势配置。 */
     fun getKeyGesture(key: String): KeyGestureConfig? = keyGestureConfig[key.lowercase()]
