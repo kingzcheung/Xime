@@ -9,7 +9,6 @@ import android.os.Environment
 import android.provider.MediaStore
 import androidx.core.content.FileProvider
 import java.io.File
-import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -49,30 +48,9 @@ object RimeExportManager {
 
     fun exportArchive(context: Context, mode: ExportMode): Result<ExportResult> {
         try {
-            val dateStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
-            val fileName = "Xime配置-$dateStr.zip"
-            val rimeDir = File(context.filesDir, "rime")
-            if (!rimeDir.exists()) {
-                return Result.failure(Exception("Rime 目录不存在"))
-            }
-
+            val (fileName, zipBytes) = buildArchive(context, mode).getOrElse { return Result.failure(it) }
             val tempZip = File(context.cacheDir, fileName)
-            ZipOutputStream(FileOutputStream(tempZip)).use { zos ->
-                rimeDir.walkTopDown().forEach { file ->
-                    if (file.isDirectory) return@forEach
-                    val relativePath = file.relativeTo(rimeDir).path.replace('\\', '/')
-                    if (!shouldInclude(relativePath, mode)) return@forEach
-                    zos.putNextEntry(ZipEntry(relativePath))
-                    file.inputStream().use { it.copyTo(zos) }
-                    zos.closeEntry()
-                }
-            }
-
-            if (tempZip.length() == 0L) {
-                tempZip.delete()
-                return Result.failure(Exception("没有可导出的文件"))
-            }
-
+            tempZip.writeBytes(zipBytes)
             val savedToDownloads = saveToDownloads(context, tempZip, fileName)
             tempZip.delete()
 
@@ -85,6 +63,64 @@ object RimeExportManager {
             return Result.success(ExportResult(resultUri, fileName, savedToDownloads))
         } catch (e: Exception) {
             android.util.Log.e(TAG, "exportArchive failed", e)
+            return Result.failure(e)
+        }
+    }
+
+    /**
+     * 生成备份包字节流（不落盘、不保存到 Downloads），供本地导出与云备份（BackupManager）共用。
+     *
+     * 包内容（v1 格式，`_xime_backup/` 前缀外均为 rime 目录相对路径）：
+     * - rime 目录文件（含 userdb / t9_digit.userdb 自造词，过滤规则见 [shouldInclude]）
+     * - 设置项、插件配置、plugins.xml（两种模式都含）
+     * - 插件包 filesDir/plugins/ 下全部文件（仅完整备份，包体可能数 MB）
+     *
+     * @return Pair(文件名, zip 字节流)
+     */
+    fun buildArchive(context: Context, mode: ExportMode): Result<Pair<String, ByteArray>> {
+        try {
+            val dateStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+            val fileName = "Xime配置-$dateStr.zip"
+            val rimeDir = File(context.filesDir, "rime")
+            if (!rimeDir.exists()) {
+                return Result.failure(Exception("Rime 目录不存在"))
+            }
+
+            val bos = java.io.ByteArrayOutputStream()
+            ZipOutputStream(bos).use { zos ->
+                rimeDir.walkTopDown().forEach { file ->
+                    if (file.isDirectory) return@forEach
+                    val relativePath = file.relativeTo(rimeDir).path.replace('\\', '/')
+                    if (!shouldInclude(relativePath, mode)) return@forEach
+                    zos.putNextEntry(ZipEntry(relativePath))
+                    file.inputStream().use { it.copyTo(zos) }
+                    zos.closeEntry()
+                }
+                BackupManager.collectMetaEntries(context, mode).forEach { (entryName, bytes) ->
+                    zos.putNextEntry(ZipEntry(entryName))
+                    zos.write(bytes)
+                    zos.closeEntry()
+                }
+                if (mode == ExportMode.FULL_BACKUP) {
+                    val pluginsDir = File(context.filesDir, "plugins")
+                    pluginsDir.walkTopDown().forEach { file ->
+                        if (file.isDirectory) return@forEach
+                        val entryName = BackupManager.META_PREFIX + "plugins/" +
+                            file.relativeTo(pluginsDir).path.replace('\\', '/')
+                        zos.putNextEntry(ZipEntry(entryName))
+                        file.inputStream().use { it.copyTo(zos) }
+                        zos.closeEntry()
+                    }
+                }
+            }
+
+            val bytes = bos.toByteArray()
+            if (bytes.isEmpty()) {
+                return Result.failure(Exception("没有可导出的文件"))
+            }
+            return Result.success(fileName to bytes)
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "buildArchive failed", e)
             return Result.failure(e)
         }
     }

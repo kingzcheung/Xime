@@ -14,6 +14,8 @@ data class PluginCapabilities(
     val tool: ToolCapabilities? = null,
     @kotlinx.serialization.SerialName("clipboard_sync")
     val clipboardSync: ClipboardSyncCapabilities? = null,
+    @kotlinx.serialization.SerialName("backup")
+    val backup: BackupCapabilities? = null,
     /** 下行事件订阅声明（如 "input_changed"）：未声明的事件宿主不投递，通道也不建立。 */
     val events: List<String> = emptyList(),
     /** 候选词变换能力（manifest 声明 `candidate_transform: true`）：rime 返回候选后、
@@ -58,6 +60,11 @@ data class PluginCapabilities(
 
     /** clipboard_sync 剪贴板同步能力声明。 */
     data class ClipboardSyncCapabilities(
+        val protocols: List<String> = emptyList(),
+    )
+
+    /** backup 备份能力声明：宿主负责备份包生成/恢复，插件只承载传输协议。 */
+    data class BackupCapabilities(
         val protocols: List<String> = emptyList(),
     )
 }

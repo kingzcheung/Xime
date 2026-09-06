@@ -15,6 +15,7 @@ enum class PluginCategory(
     ASR("speech", "语音转文本", Activation.SINGLE),
     PREDICTION("prediction", "智能预测", Activation.MULTI),
     CLIPBOARD_SYNC("clipboard_sync", "剪贴板同步", Activation.SINGLE),
+    BACKUP("backup", "备份", Activation.SINGLE),
     TOOL("tool", "工具", Activation.MULTI),
     UNKNOWN("unknown", "其他", Activation.NONE);
 

@@ -77,6 +77,8 @@ internal data class CapabilitiesConfig(
     val tool: ToolCapabilitiesConfig? = null,
     @kotlinx.serialization.SerialName("clipboard_sync")
     val clipboardSync: ClipboardSyncCapabilitiesConfig? = null,
+    @kotlinx.serialization.SerialName("backup")
+    val backup: BackupCapabilitiesConfig? = null,
     /** 下行事件订阅（如 "input_changed"），小写 snake_case。 */
     val events: List<String> = emptyList(),
     /** 候选词变换能力（hotPath，硬超时 15ms）。 */
@@ -114,6 +116,11 @@ internal data class ClipboardSyncCapabilitiesConfig(
     val protocols: List<String> = emptyList()
 )
 
+@Serializable
+internal data class BackupCapabilitiesConfig(
+    val protocols: List<String> = emptyList()
+)
+
 /** manifest 能力声明 → 类型化模型（未知字段静默忽略，非法枚举值按未声明处理）。 */
 private fun CapabilitiesConfig.toModel(): com.kingzcheung.xime.plugin.core.model.PluginCapabilities {
     return com.kingzcheung.xime.plugin.core.model.PluginCapabilities(
@@ -144,6 +151,11 @@ private fun CapabilitiesConfig.toModel(): com.kingzcheung.xime.plugin.core.model
         },
         clipboardSync = clipboardSync?.let {
             com.kingzcheung.xime.plugin.core.model.PluginCapabilities.ClipboardSyncCapabilities(
+                protocols = it.protocols.filter { p -> p.isNotBlank() }
+            )
+        },
+        backup = backup?.let {
+            com.kingzcheung.xime.plugin.core.model.PluginCapabilities.BackupCapabilities(
                 protocols = it.protocols.filter { p -> p.isNotBlank() }
             )
         },

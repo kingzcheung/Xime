@@ -152,6 +152,9 @@ class LuaScriptRuntime(
     private fun bodyToBytes(value: LuaValue): ByteArray? {
         return when {
             value.isnil() -> null
+            // LuaString 必须先于 isstring() 判断：二进制字节流（如备份 zip）若走
+            // tojstring→UTF-8 重编码会损坏；文本字符串两种路径结果一致
+            value is LuaString -> luaToBytes(value)
             value.isstring() -> value.tojstring().toByteArray(Charsets.UTF_8)
             value.istable() -> SimpleJson.encode(tableToJava(value)).toByteArray(Charsets.UTF_8)
             else -> luaToBytes(value)

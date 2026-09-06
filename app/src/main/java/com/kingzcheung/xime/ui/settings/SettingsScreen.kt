@@ -44,8 +44,8 @@ fun SettingsScreen(
                 onNavigateToSmartPrediction = { navController.navigate(SettingsRoutes.SmartPrediction) },
                 onNavigateToSpeechToText = { navController.navigate(SettingsRoutes.SpeechToText) },
                 onNavigateToAbout = { navController.navigate(SettingsRoutes.About) },
-                onNavigateToWebDav = { navController.navigate(SettingsRoutes.WebDav) },
-                onNavigateToClipboardSync = { navController.navigate(SettingsRoutes.ClipboardSync) }
+                onNavigateToClipboardSync = { navController.navigate(SettingsRoutes.ClipboardSync) },
+                onNavigateToBackup = { navController.navigate(SettingsRoutes.Backup) }
             )
         }
         composable(SettingsRoutes.Schema) {
@@ -136,7 +136,8 @@ fun SettingsScreen(
                     navController.navigate("plugin_market_detail/$pluginId")
                 },
                 onNavigateToSpeechToText = { navController.navigate(SettingsRoutes.SpeechToText) },
-                onNavigateToClipboardSync = { navController.navigate(SettingsRoutes.ClipboardSync) }
+                onNavigateToClipboardSync = { navController.navigate(SettingsRoutes.ClipboardSync) },
+                onNavigateToBackup = { navController.navigate(SettingsRoutes.Backup) }
             )
         }
         composable(
@@ -192,13 +193,14 @@ fun SettingsScreen(
                 onBack = { navController.popBackStack() }
             )
         }
-        composable(SettingsRoutes.WebDav) {
-            WebDavSyncContent(
-                onBack = { navController.popBackStack() }
-            )
-        }
         composable(SettingsRoutes.ClipboardSync) {
             ClipboardSyncSettingsContent(
+                onBack = { navController.popBackStack() },
+                onNavigateToPlugins = { navController.navigate(SettingsRoutes.Plugins) }
+            )
+        }
+        composable(SettingsRoutes.Backup) {
+            BackupSettingsContent(
                 onBack = { navController.popBackStack() },
                 onNavigateToPlugins = { navController.navigate(SettingsRoutes.Plugins) }
             )
