@@ -52,6 +52,10 @@ import com.kingzcheung.xime.util.SubcharHelper
  * 第2行：- | 4 | 5 | 6 | 符号切换
  * 第3行：* | 7 | 8 | 9 | 表情
  * 第4行：ABC | / | 0 | . | 确定
+ *
+ * [backKeyOnLeft] 为 true 时，左下角的「符号」键与数字区底行的「返回(ABC)」键互换位置：
+ * 从全键盘 ?123（位于左下角）进入数字键盘时，返回键保持在用户的进入位置；
+ * 默认 false 保持九键布局习惯（符号键在最左下角）。
  */
 @Composable
 fun NumberKeyboardLayout(
@@ -71,6 +75,7 @@ fun NumberKeyboardLayout(
     onKeyPressDown: ((String) -> Unit)? = null,
     isFloatingMode: Boolean = false,
     specialKeyTextColor: Color = Color.White,
+    backKeyOnLeft: Boolean = false,
 ) {
 
     val configuration = LocalConfiguration.current
@@ -193,6 +198,7 @@ fun NumberKeyboardLayout(
                         onKeyPressDown = onKeyPressDown,
                         compactMode = true,
                         specialKeyTextColor = specialKeyTextColor,
+                        backKeyOnLeft = backKeyOnLeft,
                         onSwipeStateChange = ::processSwipeState
                     )
                     }
@@ -222,6 +228,7 @@ fun NumberKeyboardLayout(
                     shadowShapeRadius = shadowShapeRadius,
                     onKeyPressDown = onKeyPressDown,
                     specialKeyTextColor = specialKeyTextColor,
+                    backKeyOnLeft = backKeyOnLeft,
                     onSwipeStateChange = ::processSwipeState
                 )
             }
@@ -245,6 +252,7 @@ private fun NumberRows(
     onSwipeStateChange: ((SwipeState, Rect) -> Unit)? = null,
     compactMode: Boolean = false,
     specialKeyTextColor: Color = Color.White,
+    backKeyOnLeft: Boolean = false,
 ) {
     val symFontSize = if (compactMode) 14.sp else 18.sp
     val keyFontSize = if (compactMode) 16.sp else androidx.compose.ui.unit.TextUnit.Unspecified
@@ -305,18 +313,32 @@ private fun NumberRows(
                             .fillMaxHeight()
                             .weight(1f),
                     ) {
-                        KeyButton(
-                            text = "符号",
-                            onClick = { onKeyPress("symbol") },
-                            backgroundColor = specialKeyBackgroundColor,
-                            textColor = specialKeyTextColor,
-                            modifier = Modifier.weight(1f),
-                            onPress = { onKeyPressDown?.invoke("symbol") },
-                            shadowEnabled = shadowEnabled,
-                            shadowElevation = shadowElevation,
-                            shadowShapeRadius = shadowShapeRadius,
-                            fontSize = ctrlFontSize,
-                        )
+                        if (backKeyOnLeft) {
+                            IconKeyButton(
+                                icon = rememberVectorPainter(Icons.AutoMirrored.Filled.ArrowBack),
+                                onClick = { onKeyPress("abc") },
+                                backgroundColor = specialKeyBackgroundColor,
+                                iconColor = specialKeyTextColor,
+                                modifier = Modifier.weight(1f),
+                                onPress = { onKeyPressDown?.invoke("abc") },
+                                shadowEnabled = shadowEnabled,
+                                shadowElevation = shadowElevation,
+                                shadowShapeRadius = shadowShapeRadius,
+                            )
+                        } else {
+                            KeyButton(
+                                text = "符号",
+                                onClick = { onKeyPress("symbol") },
+                                backgroundColor = specialKeyBackgroundColor,
+                                textColor = specialKeyTextColor,
+                                modifier = Modifier.weight(1f),
+                                onPress = { onKeyPressDown?.invoke("symbol") },
+                                shadowEnabled = shadowEnabled,
+                                shadowElevation = shadowElevation,
+                                shadowShapeRadius = shadowShapeRadius,
+                                fontSize = ctrlFontSize,
+                            )
+                        }
                     }
 
                 }
@@ -403,17 +425,32 @@ private fun NumberRows(
                     ) {
 
 
-                        IconKeyButton(
-                            icon = rememberVectorPainter(Icons.AutoMirrored.Filled.ArrowBack),
-                            onClick = { onKeyPress("abc") },
-                            backgroundColor = specialKeyBackgroundColor,
-                            iconColor = specialKeyTextColor,
-                            modifier = Modifier.weight(1f),
-                            onPress = { onKeyPressDown?.invoke("abc") },
-                            shadowEnabled = shadowEnabled,
-                            shadowElevation = shadowElevation,
-                            shadowShapeRadius = shadowShapeRadius,
-                        )
+                        if (backKeyOnLeft) {
+                            KeyButton(
+                                text = "符号",
+                                onClick = { onKeyPress("symbol") },
+                                backgroundColor = specialKeyBackgroundColor,
+                                textColor = specialKeyTextColor,
+                                modifier = Modifier.weight(1f),
+                                onPress = { onKeyPressDown?.invoke("symbol") },
+                                shadowEnabled = shadowEnabled,
+                                shadowElevation = shadowElevation,
+                                shadowShapeRadius = shadowShapeRadius,
+                                fontSize = ctrlFontSize,
+                            )
+                        } else {
+                            IconKeyButton(
+                                icon = rememberVectorPainter(Icons.AutoMirrored.Filled.ArrowBack),
+                                onClick = { onKeyPress("abc") },
+                                backgroundColor = specialKeyBackgroundColor,
+                                iconColor = specialKeyTextColor,
+                                modifier = Modifier.weight(1f),
+                                onPress = { onKeyPressDown?.invoke("abc") },
+                                shadowEnabled = shadowEnabled,
+                                shadowElevation = shadowElevation,
+                                shadowShapeRadius = shadowShapeRadius,
+                            )
+                        }
                         KeyButton(
                             text = "0",
                             onClick = { onKeyPress("0") },

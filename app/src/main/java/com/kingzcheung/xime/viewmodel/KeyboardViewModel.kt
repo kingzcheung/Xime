@@ -111,6 +111,11 @@ class KeyboardViewModel(application: Application) : AndroidViewModel(application
     private val _keyboardState = MutableStateFlow<KeyboardLayoutState>(KeyboardLayoutState.Chinese)
     val keyboardState: StateFlow<KeyboardLayoutState> = _keyboardState.asStateFlow()
 
+    /** 最近一次停留的主键盘布局（中文/英文全键盘、九键、笔画）；
+     *  数字面板据此判断进入来源，决定「返回/符号」键的位置自适应 */
+    private val _lastMainLayout = MutableStateFlow<KeyboardLayoutState>(KeyboardLayoutState.Chinese)
+    val lastMainLayout: StateFlow<KeyboardLayoutState> = _lastMainLayout.asStateFlow()
+
     private val _page = MutableStateFlow<KeyboardPage>(KeyboardPage.Main(MainType.FULL))
     val page: StateFlow<KeyboardPage> = _page.asStateFlow()
 
@@ -302,6 +307,7 @@ class KeyboardViewModel(application: Application) : AndroidViewModel(application
             _shiftMode.value = ShiftMode.OFF
         }
         _keyboardState.value = newKbState
+        _syncViewState()
     }
 
     fun toggleShift() {
@@ -363,6 +369,17 @@ class KeyboardViewModel(application: Application) : AndroidViewModel(application
     private fun _syncViewState() {
         val kb = _keyboardState.value
         val p = _page.value
+        // 主键盘布局真正显示时刷新「最近主布局」来源记录（数字面板返回/符号键位置自适应依赖）。
+        // 必须放在 _syncViewState：切九键/笔画等走 dispatch 直接赋值，不经过 setKeyboardState
+        if (p is KeyboardPage.Main && p.type == com.kingzcheung.xime.keyboard.MainType.FULL) {
+            when (kb) {
+                is KeyboardLayoutState.Chinese,
+                is KeyboardLayoutState.English,
+                is KeyboardLayoutState.T9Pinyin,
+                is KeyboardLayoutState.Stroke -> _lastMainLayout.value = kb
+                else -> {}
+            }
+        }
         val vs: KeyboardViewState = when (p) {
             is KeyboardPage.Overlay -> KeyboardViewState.Overlay(p.route, p.backStack, _viewState.value.let { if (it is KeyboardViewState.Overlay) it.behind else it })
             is KeyboardPage.Panel -> when (p.type) {
