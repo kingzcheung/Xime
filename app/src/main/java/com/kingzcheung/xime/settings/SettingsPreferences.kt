@@ -74,10 +74,6 @@ object SettingsPreferences {
         getPrefs(context).edit().putString(KEY_TOOLBAR_BUTTONS, buttons.joinToString(",")).apply()
     }
 
-    private const val KEY_WEBDAV_URL = "webdav_url"
-    private const val KEY_WEBDAV_USERNAME = "webdav_username"
-    private const val KEY_WEBDAV_PASSWORD = "webdav_password"
-    private const val KEY_WEBDAV_PATH = "webdav_path"
 
     private const val KEY_SCHEMA_IMPORT_WARNING_DISMISSED = "schema_import_warning_dismissed"
 

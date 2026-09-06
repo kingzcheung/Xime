@@ -39,6 +39,9 @@ std::string T9ConvertCandidatePreedit(const std::string& preedit,
 // dynamic_cast<SimpleCandidate*>(&c) 成功，从而 set_preedit()
 // 可被后续 filter（如 super_comment_preedit）通过 cand.preedit = val
 // 覆盖 preedit 值，避免锁死 bug。
+// 同时实现 genuine() 虚解包协议：GetGenuineCandidate 经此拿到内层
+// 原始候选，使长按删词（Memory::OnDeleteEntry）能取到底层 Phrase——
+// 之前继承链断在 SimpleCandidate，T9 删词静默无效（全键盘无 t9_filter 不受影响）。
 class T9PreeditCandidate : public SimpleCandidate {
 public:
     T9PreeditCandidate(an<Candidate> item, const string& preedit)
@@ -53,6 +56,7 @@ public:
     // set_preedit(v) 供后续 Lua filter（super_comment_preedit）覆盖 preedit。
 
     an<Candidate> item() const { return item_; }
+    an<Candidate> genuine() const override { return item_; }
 
 private:
     an<Candidate> item_;
