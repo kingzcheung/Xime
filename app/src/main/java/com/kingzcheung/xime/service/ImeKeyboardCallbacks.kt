@@ -9,6 +9,7 @@ import com.kingzcheung.xime.rime.T9InputController
 import com.kingzcheung.xime.rime.RimeProcessResult
 import com.kingzcheung.xime.settings.SettingsPreferences
 import com.kingzcheung.xime.ui.keyboard.KeyboardCallbacks
+import com.kingzcheung.xime.ui.keyboard.FloatingKeyboardGeometry
 import com.kingzcheung.xime.ui.keyboard.isT9Schema
 import com.kingzcheung.xime.util.FileLogger
 import kotlin.math.abs
@@ -262,28 +263,28 @@ internal fun rememberImeKeyboardCallbacks(
             },
             onDismissDeploying = { service.notifyDeploymentStatus(false, "") },
             onFloatingModeChange = { enabled -> service.schemaController.toggleFloatingMode(enabled, floatingMinY) },
-            onFloatingKeyboardDrag = { dx, dy ->
+            onFloatingKeyboardDragCommit = { x, y ->
+                // 拖拽位移期间由容器本地状态承载，此处只在拖拽结束时收到一次最终
+                // 位置：clamp 后更新 uiState 并持久化，避免拖拽帧率级别的全键盘重组
                 val s = service.uiState.value
+                val cfgLandscape = service.resources.configuration.screenWidthDp > service.resources.configuration.screenHeightDp
                 val screenW = service.resources.configuration.screenWidthDp
-                val screenH = if (state.isFloatingMode) effectiveScreenH else service.resources.configuration.screenHeightDp
-                val portraitWidth = minOf(screenW, screenH)
-                val cardWidth = (portraitWidth * 0.85f).roundToInt()
-                val halfMargin = ((screenW - cardWidth) / 2f).roundToInt()
-                val newX = (s.floatingOffsetX + dx).roundToInt().coerceIn(-halfMargin, halfMargin)
-                val newY_raw = (s.floatingOffsetY + dy).roundToInt()
-                val actualCardH = if (service.currentFloatingCardHeightDp > 0) service.currentFloatingCardHeightDp else service.currentEffectiveKeyboardHeight
-                val maxOffsetY = (screenH - actualCardH).coerceAtLeast(floatingMinY)
-                val newY = newY_raw.coerceIn(0, maxOffsetY)
+                val screenH = if (s.isFloatingMode) effectiveScreenH else service.resources.configuration.screenHeightDp
+                val cardW = FloatingKeyboardGeometry.cardWidthDp(screenW, screenH)
+                // 卡片高度优先用 onCardPositioned 回报的实测值；未布局完成时为 0（不限制上界）
+                val cardH = service.currentEffectiveKeyboardHeight.takeIf { it > 0 } ?: 0
+                val (clampedX, clampedY) = FloatingKeyboardGeometry.clampOffset(
+                    x, y, screenW, screenH,
+                    cardW.toFloat(), cardH.toFloat(), floatingMinY.toFloat(),
+                )
+                val newX = clampedX.roundToInt()
+                val newY = clampedY.roundToInt()
                 service.uiState.value = s.copy(
                     floatingOffsetX = newX,
                     floatingOffsetY = newY,
                 )
-            },
-            onFloatingKeyboardDragEnd = {
-                val s = service.uiState.value
-                val isLandscape = service.resources.configuration.screenWidthDp > service.resources.configuration.screenHeightDp
-                SettingsPreferences.setFloatingOffsetX(service, s.floatingOffsetX, isLandscape)
-                SettingsPreferences.setFloatingOffsetY(service, s.floatingOffsetY, isLandscape)
+                SettingsPreferences.setFloatingOffsetX(service, newX, cfgLandscape)
+                SettingsPreferences.setFloatingOffsetY(service, newY, cfgLandscape)
             },
             onT9ReplaceFullPinyin = { pinyin ->
                 service.serviceScope.launch(service.keyProcessingDispatcher) {

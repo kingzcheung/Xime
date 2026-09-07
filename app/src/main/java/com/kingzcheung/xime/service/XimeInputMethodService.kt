@@ -97,6 +97,7 @@ import com.kingzcheung.xime.settings.SchemaConfigHelper
 import com.kingzcheung.xime.settings.SchemaManager
 import com.kingzcheung.xime.settings.SettingsPreferences
 import com.kingzcheung.xime.ui.keyboard.KeyboardView
+import com.kingzcheung.xime.ui.keyboard.FloatingKeyboardGeometry
 import com.kingzcheung.xime.ui.keyboard.isT9Schema
 import com.kingzcheung.xime.ui.theme.KeyboardThemes
 import com.kingzcheung.xime.ui.theme.keyboardBackground
@@ -234,9 +235,6 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
 
     private val bottomInsetPxState = mutableStateOf(0)
     private var hasHardwareKeyboard = false
-    private var floatingWinX = 100
-    private var floatingWinY = 300
-    
     internal var isTrackingVoiceButtons = false
     internal var voiceRecordingStarted = false
     private var pendingVoiceAction: (() -> Unit)? = null
@@ -248,7 +246,6 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
     internal var keyboardCallbacks: KeyboardCallbacks? = null
     internal var isChineseMode = true
     internal var currentEffectiveKeyboardHeight: Int = 0
-    internal var currentFloatingCardHeightDp: Int = 0
     internal var previousSchemaId: String = ""
     
     internal val calculatorEngine = com.kingzcheung.xime.calculator.CalculatorEngine()
@@ -335,29 +332,31 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
     
     private fun loadDarkModePreference() {
         val isLandscape = resources.configuration.screenWidthDp > resources.configuration.screenHeightDp
+        // 只读当前方向的悬浮偏好；横竖屏各自独立记忆，不做跨方向镜像写
         val isFloatingMode = SettingsPreferences.isFloatingMode(this, isLandscape)
-        SettingsPreferences.setFloatingMode(this, isFloatingMode, !isLandscape)
         val loadedX = SettingsPreferences.getFloatingOffsetX(this, isLandscape)
         val loadedY = SettingsPreferences.getFloatingOffsetY(this, isLandscape)
-        SettingsPreferences.setFloatingOffsetX(this, loadedX, !isLandscape)
-        SettingsPreferences.setFloatingOffsetY(this, loadedY, !isLandscape)
         val screenW = resources.configuration.screenWidthDp
         val screenH = resources.configuration.screenHeightDp
-        val portraitWidth = minOf(screenW, screenH)
-        val cardWidth = (portraitWidth * 0.85f).roundToInt()
-        val halfMargin = maxOf(0, (screenW - cardWidth) / 2)
+        val cardWidth = FloatingKeyboardGeometry.cardWidthDp(screenW, screenH)
+        val halfMargin = FloatingKeyboardGeometry.halfMarginDp(screenW, cardWidth)
         val kbH = SettingsPreferences.getKeyboardHeightDp(this, isLandscape)
         val cappedKbH = kbH.coerceAtMost((screenH * 8) / 10)
-        val cardH = (cappedKbH * 0.85f).roundToInt() + 18
+        val cardH = (cappedKbH * FloatingKeyboardGeometry.SCALE_FRACTION).roundToInt() + FloatingKeyboardGeometry.DRAG_BAR_HEIGHT_DP
         val navBarDp = tryGetNavBarHeightDp(this, window.window)
         val minY = if (isFloatingMode) navBarDp else 0
         val effectiveH = if (isFloatingMode) screenH - tryGetStatusBarHeightDp(this, window.window) else screenH
-        val maxY = maxOf(minY, effectiveH - cardH - 20)
-        val clampedX = loadedX.coerceIn(-halfMargin, halfMargin)
-        val clampedY = loadedY.coerceIn(minY, maxY)
-        if (clampedX != loadedX || clampedY != loadedY) {
-            SettingsPreferences.setFloatingOffsetX(this, clampedX, isLandscape)
-            SettingsPreferences.setFloatingOffsetY(this, clampedY, isLandscape)
+        val (clampedX, clampedY) = FloatingKeyboardGeometry.clampOffset(
+            loadedX.toFloat(), loadedY.toFloat(),
+            screenW, effectiveH,
+            cardWidth.toFloat(), cardH.toFloat(),
+            minY.toFloat(),
+        )
+        val clampedXi = clampedX.roundToInt()
+        val clampedYi = clampedY.roundToInt()
+        if (clampedXi != loadedX || clampedYi != loadedY) {
+            SettingsPreferences.setFloatingOffsetX(this, clampedXi, isLandscape)
+            SettingsPreferences.setFloatingOffsetY(this, clampedYi, isLandscape)
         }
         uiState.value = uiState.value.copy(
             darkMode = SettingsPreferences.getDarkMode(this),
@@ -367,8 +366,8 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
             keyboardBottomPaddingDp = SettingsPreferences.getKeyboardBottomPaddingDp(this),
             toolbarButtons = SettingsPreferences.getToolbarButtons(this),
             isFloatingMode = isFloatingMode,
-            floatingOffsetX = clampedX,
-            floatingOffsetY = clampedY,
+            floatingOffsetX = clampedXi,
+            floatingOffsetY = clampedYi,
         )
     }
     
@@ -1179,10 +1178,17 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
                 } else {
                     displayHeight
                 }
-                val floatScale = if (state.isFloatingMode) 0.85f else 1f
+                val floatScale = if (state.isFloatingMode) FloatingKeyboardGeometry.SCALE_FRACTION else 1f
                 val effectiveKeyboardHeight = (keyboardHeight * floatScale).toInt()
-                val floatingDragBarHeight = if (state.isFloatingMode) 18 else 0
+                val floatingDragBarHeight = if (state.isFloatingMode) FloatingKeyboardGeometry.DRAG_BAR_HEIGHT_DP else 0
                 val floatingCardContentHeight = effectiveKeyboardHeight + floatingDragBarHeight
+                // 拖拽提交与容器实时 clamp 共用的垂直上界：卡片顶边不超过状态栏下沿（留 EDGE_MARGIN）
+                val floatingMaxY = if (state.isFloatingMode) {
+                    maxOf(
+                        floatingMinY,
+                        effectiveScreenH - floatingCardContentHeight - FloatingKeyboardGeometry.EDGE_MARGIN_DP
+                    )
+                } else Int.MAX_VALUE
                 
                 val density = LocalDensity.current
                 // 统一使用 View 层多类型检测的 insets，避免 Compose
@@ -1234,7 +1240,7 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
                             // OnComputeInternalInsetsListener，值变化即 setInsets），
                             // 无需 +1dp hack 强制造型变化。
                             keyboardContainer.updateHeight(totalDp)
-                            currentEffectiveKeyboardHeight = if (state.isFloatingMode) keyboardHeight + floatingDragBarHeight + 50 + state.keyboardBottomPaddingDp
+                            currentEffectiveKeyboardHeight = if (state.isFloatingMode) keyboardHeight + floatingDragBarHeight + FloatingKeyboardGeometry.EXTRA_HEIGHT_ESTIMATE_DP + state.keyboardBottomPaddingDp
                                 else if (state.isCompact) HARDWARE_CANDIDATE_BAR_HEIGHT
                                 else effectiveKeyboardHeight + overlayPanelExtra
                         }
@@ -1298,6 +1304,7 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
                                 isDarkTheme,
                                 effectiveKeyboardHeight,
                                 floatingMinY,
+                                floatingMaxY,
                             isHandwritingMode,
                             clipboardItemsState.value,
                             quickSendItemsState.value,
@@ -1337,6 +1344,7 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
                                     floatingOffsetX = state.floatingOffsetX,
                                     floatingOffsetY = state.floatingOffsetY,
                                     floatingMinOffsetY = floatingMinY,
+                                    floatingMaxOffsetY = floatingMaxY,
                                     t9ResetSignal = state.t9ResetSignal,
                                     swipeCancelEpoch = state.swipeCancelEpoch,
                                     t9RightCandidateSelectedCount = state.t9RightCandidateSelectedCount,

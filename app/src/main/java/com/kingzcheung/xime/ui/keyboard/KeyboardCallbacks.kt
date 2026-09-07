@@ -60,8 +60,12 @@ data class KeyboardCallbacks(
     val onKeyboardModeChange: ((Boolean) -> Unit)? = null,
     val onDismissDeploying: (() -> Unit)? = null,
     val onFloatingModeChange: ((Boolean) -> Unit)? = null,
-    val onFloatingKeyboardDrag: ((dx: Float, dy: Float) -> Unit)? = null,
-    val onFloatingKeyboardDragEnd: (() -> Unit)? = null,
+    /**
+     * 悬浮键盘拖拽结束，一次性提交卡片最终位置（dp；x 为相对屏幕中心的水平
+     * 偏移，y 为距底部的上移量）。宿主负责 clamp、更新 uiState 并持久化。
+     * 拖拽过程中的位移由容器本地状态承载，不经过此回调。
+     */
+    val onFloatingKeyboardDragCommit: ((x: Float, y: Float) -> Unit)? = null,
     val onT9ReplaceFullPinyin: ((String) -> Unit)? = null,
     /**
      * 回退最近一次 T9 半提交：清除累积的半提交文本（及输入框中已上屏的文字）。

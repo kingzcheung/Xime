@@ -13,6 +13,7 @@ import com.kingzcheung.xime.settings.SchemaConfigHelper
 import com.kingzcheung.xime.settings.SchemaManager
 import com.kingzcheung.xime.rime.RimeConfigHelper
 import com.kingzcheung.xime.settings.SettingsPreferences
+import com.kingzcheung.xime.ui.keyboard.FloatingKeyboardGeometry
 import com.kingzcheung.xime.ui.theme.KeyboardThemes
 import com.kingzcheung.xime.util.FileLogger
 import java.io.File
@@ -383,9 +384,8 @@ internal class ImeSchemaController(private val service: XimeInputMethodService) 
         val loadedY = SettingsPreferences.getFloatingOffsetY(service, isLandscape)
         val screenW = service.resources.configuration.screenWidthDp
         val screenH = service.resources.configuration.screenHeightDp
-        val portraitWidth = minOf(screenW, screenH)
-        val cardWidth = (portraitWidth * 0.85f).roundToInt()
-        val halfMargin = maxOf(0, (screenW - cardWidth) / 2)
+        val cardWidth = FloatingKeyboardGeometry.cardWidthDp(screenW, screenH)
+        val halfMargin = FloatingKeyboardGeometry.halfMarginDp(screenW, cardWidth)
         val cappedKbH = SettingsPreferences.getKeyboardHeightDp(service, isLandscape).coerceAtMost((screenH * 8) / 10)
         val clampedX = loadedX.coerceIn(-halfMargin, halfMargin)
         service.uiState.value = service.uiState.value.copy(
@@ -395,7 +395,8 @@ internal class ImeSchemaController(private val service: XimeInputMethodService) 
         )
         if (enabled) {
             service.closeToolPanel()
-            service.currentEffectiveKeyboardHeight = cappedKbH + 18 + 50 + service.uiState.value.keyboardBottomPaddingDp
+            service.currentEffectiveKeyboardHeight = cappedKbH + FloatingKeyboardGeometry.DRAG_BAR_HEIGHT_DP +
+                FloatingKeyboardGeometry.EXTRA_HEIGHT_ESTIMATE_DP + service.uiState.value.keyboardBottomPaddingDp
         }
         service.applyWindowBackground()
     }

@@ -215,8 +215,8 @@ fun KeyboardView(
     val screenW = LocalConfiguration.current.screenWidthDp
     val screenH = LocalConfiguration.current.screenHeightDp
     val portraitScreenWidth = minOf(screenW, screenH)
-    val cardWidthDp = (portraitScreenWidth * 0.85f).roundToInt()
-    val floatScaleFactor = if (state.isFloatingMode) cardWidthDp.toFloat() / screenW.toFloat() else 0.85f
+    val cardWidthDp = FloatingKeyboardGeometry.cardWidthDp(screenW, screenH)
+    val floatScaleFactor = if (state.isFloatingMode) cardWidthDp.toFloat() / screenW.toFloat() else FloatingKeyboardGeometry.SCALE_FRACTION
     val floatFontScale = if (state.isFloatingMode) cardWidthDp.toFloat() / portraitScreenWidth.toFloat() else 1f
 
     val contentModifier = if (state.isFloatingMode) {
@@ -233,9 +233,9 @@ fun KeyboardView(
         offsetX = state.floatingOffsetX,
         offsetY = state.floatingOffsetY,
         minOffsetY = state.floatingMinOffsetY,
+        maxOffsetY = state.floatingMaxOffsetY,
         backgroundColor = keyboardBgColor,
-        onDrag = { dx, dy -> callbacks.onFloatingKeyboardDrag?.invoke(dx, dy) },
-        onDragEnd = { callbacks.onFloatingKeyboardDragEnd?.invoke() },
+        onDragCommit = { x, y -> callbacks.onFloatingKeyboardDragCommit?.invoke(x, y) },
         onCardPositioned = onCardPositioned,
     ) {
     Box(modifier = contentModifier) {
