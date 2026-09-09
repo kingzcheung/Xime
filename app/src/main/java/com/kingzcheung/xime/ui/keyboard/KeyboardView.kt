@@ -402,6 +402,9 @@ fun KeyboardView(
                 callbacks = CandidateBarCallbacks(
                     onCandidateSelect = { index ->
                         if (showHandwritingCandidates && index in handwritingCandidates.indices) {
+                            // 手写候选点选绕过了服务层 selectCandidate（其入口统一有按键反馈），
+                            // 这里补齐同款反馈，保证各键盘点选手感一致
+                            callbacks.onKeyPressDown?.invoke("standard")
                             if (isHandwritingLookup) {
                                 // 手写查词：直接上屏（原有行为）
                                 val ch = handwritingCandidates[index]
@@ -411,7 +414,7 @@ fun KeyboardView(
                                 handwritingClearSignal++
                             } else {
                                 // 兜底路径（AssociationOnly 正常走 onAssociationSelect）：
-                                // 与点选替换同语义；候选栏保留供继续改选
+                                // 与点选替换同语义；点选即结束选择期，候选栏清空
                                 val ch = handwritingCandidates[index]
                                 if (index > 0 && handwritingLastSegLen > 0) {
                                     val newTail = handwritingTail.dropLast(handwritingLastSegLen) + ch
@@ -421,6 +424,8 @@ fun KeyboardView(
                                 }
                                 handwritingActiveLen = 0
                                 callbacks.onHandwritingFinalize?.invoke()
+                                handwritingCandidates = emptyList()
+                                handwritingComments = emptyList()
                                 handwritingClearSignal++
                             }
                         } else {
@@ -475,6 +480,9 @@ fun KeyboardView(
                     },
                     onAssociationSelect = { index ->
                         if (showHandwritingCandidates && index in handwritingCandidates.indices) {
+                            // 手写候选点选绕过了服务层 onAssociationSelect（其入口统一有按键反馈），
+                            // 这里补齐同款反馈，保证各键盘点选手感一致
+                            callbacks.onKeyPressDown?.invoke("standard")
                             if (isHandwritingLookup) {
                                 // 手写查词：查词结果直接上屏（原有行为，与叠写状态无关）
                                 val ch = handwritingCandidates[index]
@@ -483,14 +491,16 @@ fun KeyboardView(
                                 handwritingComments = emptyList()
                                 handwritingClearSignal++
                             } else if (index == 0) {
-                                // 首选已自动上屏：点选仅固化当前字并触发联想。
-                                // 候选栏保留——用户可继续改点其他候选，直到下一次书写
+                                // 首选已自动上屏：点选固化当前字并触发联想。
+                                // 点选即结束选择期：候选栏清空（下一轮书写重新填充）
                                 handwritingActiveLen = 0
                                 callbacks.onHandwritingFinalize?.invoke()
+                                handwritingCandidates = emptyList()
+                                handwritingComments = emptyList()
                                 handwritingClearSignal++
                             } else {
                                 // 替换最后上屏的字为点选候选（停顿定型后仍可替换）。
-                                // 候选栏保留供继续改选，笔画清空
+                                // 点选即结束选择期：候选栏清空，笔画清空
                                 val ch = handwritingCandidates[index]
                                 val newTail = handwritingTail.dropLast(handwritingLastSegLen) + ch
                                 val ok = callbacks.onHandwritingAutoCommit?.invoke(newTail, handwritingTail) ?: false
@@ -498,6 +508,8 @@ fun KeyboardView(
                                 handwritingActiveLen = 0
                                 handwritingLastSegLen = ch.length
                                 callbacks.onHandwritingFinalize?.invoke()
+                                handwritingCandidates = emptyList()
+                                handwritingComments = emptyList()
                                 handwritingClearSignal++
                             }
                         } else {
