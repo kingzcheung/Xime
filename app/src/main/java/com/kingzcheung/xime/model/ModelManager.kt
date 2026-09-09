@@ -9,7 +9,6 @@ object ModelManager {
     private const val TAG = "ModelManager"
 
     private var initialized = false
-    private val remoteModels = mutableListOf<ModelInfo>()
     private val _modelsFlow = kotlinx.coroutines.flow.MutableStateFlow<List<ModelInfo>>(emptyList())
 
     /** 可观察的模型清单（远程 index 加载后自动更新） */
@@ -21,8 +20,11 @@ object ModelManager {
         FileLogger.i(TAG, "ModelManager initialized")
     }
 
-    /** 模型清单完全来自远程 index（xime_index.base_urls 指向的 models/index.yaml） */
-    private fun allModels(): List<ModelInfo> = remoteModels
+    /** 模型清单完全来自远程 index（xime_index.base_urls 指向的 models/index.yaml）。
+     *  以 StateFlow 内的不可变列表为唯一状态源：读方拿到的是发布时的快照，
+     *  与后续刷新互不干扰（历史上共享可变列表曾被遍历方并发 clear/addAll，
+     *  连点刷新触发 ConcurrentModificationException 闪退）。 */
+    private fun allModels(): List<ModelInfo> = _modelsFlow.value
 
     fun getAllModels(): List<ModelInfo> = allModels()
 
@@ -33,17 +35,15 @@ object ModelManager {
 
     suspend fun loadFromRemote(context: Context) {
         val remote = ModelIndexLoader.loadFromRemote(context)
-        remoteModels.clear()
         if (remote.isNotEmpty()) {
-            remoteModels.addAll(remote)
             FileLogger.i(TAG, "Loaded ${remote.size} models from remote index")
         } else {
             FileLogger.w(TAG, "Remote index returned empty, no models available")
         }
-        _modelsFlow.value = remoteModels.toList()
+        _modelsFlow.value = remote
     }
 
-    fun isUsingRemoteIndex(): Boolean = remoteModels.isNotEmpty()
+    fun isUsingRemoteIndex(): Boolean = _modelsFlow.value.isNotEmpty()
 
     fun isModelDownloaded(context: Context, id: String): Boolean {
         val model = getModel(id) ?: return false

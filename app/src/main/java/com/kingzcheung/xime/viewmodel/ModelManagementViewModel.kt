@@ -93,6 +93,8 @@ class ModelManagementViewModel(application: Application) : AndroidViewModel(appl
     }
 
     fun refresh() {
+        // 连点防抖：刷新进行中忽略后续点击（重复拉取网络 index 徒增开销）
+        if (_uiState.value.isLoading) return
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
             refreshFromRemote()
