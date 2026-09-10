@@ -2261,7 +2261,21 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
     internal val candidateTransform = CandidateTransformCoordinator(this)
 
     override fun commitText(text: String) {
-        commitTextSilently(text)
+        commitTextAndPredict(text, isPaste = false)
+    }
+
+    /**
+     * 粘贴性质上屏（键盘剪贴板点选/编辑面板提交）：与 [commitText] 相同的上屏与
+     * 联想行为，但 text_committed 事件带 is_paste 标记——事件语义是"文本上屏"
+     * （照常投递给所有订阅插件），是否把粘贴计入打字量由插件自行决定
+     * （typing-stats 过滤，用户反馈"一天一万多字"的主要来源即长文本粘贴）。
+     */
+    internal fun commitPastedText(text: String) {
+        commitTextAndPredict(text, isPaste = true)
+    }
+
+    private fun commitTextAndPredict(text: String, isPaste: Boolean) {
+        commitTextSilently(text, isPaste)
         if (isChineseMode) {
             mainHandler.post {
                 if (!uiState.value.isAsciiMode) {
@@ -2299,9 +2313,10 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
      * 静默上屏：与 [commitText] 相同的落盘路径（内部编辑器重定向、InputConnection、
      * text_committed 事件、联想上下文/输入统计），但不触发联想推理。
      * 手写叠写自动上屏/替换使用——笔画替换频率高，逐次推理既浪费又会闪烁候选栏。
+     * [isPaste] 标记粘贴性质上屏，透传到 text_committed payload（见 commitPastedText）。
      * 需在主线程调用。
      */
-    internal fun commitTextSilently(text: String) {
+    internal fun commitTextSilently(text: String, isPaste: Boolean = false) {
         if (uiState.value.quickSendFormFocused) {
             // 焦点在触发编码输入框时路由到编码框，否则路由到快捷发送文本框
             val codeFocused = uiState.value.quickSendCodeFocused
@@ -2331,8 +2346,9 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
         currentInputConnection?.commitText(text, 1)
 
         // text_committed 事件：真实上屏才累计/投递（内部编辑器分支已在上方 return；
-        // 敏感输入框（密码）不计不投；详见 PluginEventDispatcher）
-        pluginEvents.onTextCommitted(text)
+        // 敏感输入框（密码）不计不投；粘贴性质上屏带 is_paste 标记，见 commitPastedText；
+        // 详见 PluginEventDispatcher）
+        pluginEvents.onTextCommitted(text, isPaste)
 
         if (isChineseMode) {
             predictionManager.appendCommittedText(text)

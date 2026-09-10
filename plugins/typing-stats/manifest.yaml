@@ -8,14 +8,16 @@ name: 输入统计
 icon: "统"
 description: 统计打字量（今日/累计字数、提交次数）。基于宿主下行事件，无网络访问。
 
-version: 0.2.0
+# 0.3.0：text_committed 事件契约扩展——payload 新增 is_paste（粘贴性质上屏标记），
+# 本插件据此不计粘贴字数；依赖宿主 2.8.1 投递该字段，低于此版本禁用本插件。
+version: 0.3.0
 
 type: tool
 activation: multi
 
 entry: main.lua
 
-minHostVersion: 2.8.0
+minHostVersion: 2.8.1
 
 # 工具栏入口
 toolbarButtons:

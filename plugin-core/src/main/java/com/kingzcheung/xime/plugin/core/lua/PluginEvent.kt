@@ -37,6 +37,13 @@ data class PluginEvent(
         const val FIELD_SESSION_TOTAL_COMMITS = "session_total_commits"
 
         /**
+         * FIELD_IS_PASTE：本次上屏是否为粘贴性质（键盘剪贴板点选/编辑面板提交）。
+         * 事件语义仍为"文本上屏"（照常投递、计数器照常累计以维持差值基准），
+         * 是否把粘贴计入打字量由各订阅插件自行决定（如 typing-stats 过滤）。
+         */
+        const val FIELD_IS_PASTE = "is_paste"
+
+        /**
          * 快捷发送列表变更：payload = { count: Int }。
          * 只通知变更（conflated 只保最新），插件收到后调 host.quickSend.list() 重新拉取。
          */

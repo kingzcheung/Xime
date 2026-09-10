@@ -19,6 +19,9 @@ internal class PluginEventDispatcher(private val service: XimeInputMethodService
     /** 上一次投递的 composing 快照：内容未变化时不重复投递。 */
     private var lastDispatchedInputText: String? = null
 
+    /** 累计快照（仅供同模块测试断言）。 */
+    internal val sessionCommittedCharsForTest: Long get() = sessionCommittedChars
+
     /** 进程生命周期累计上屏字符数（text_committed payload，插件统计用）。 */
     private var sessionCommittedChars: Long = 0L
 
@@ -59,10 +62,14 @@ internal class PluginEventDispatcher(private val service: XimeInputMethodService
     /**
      * 文本上屏 → text_committed。payload 携带进程生命周期累计值：
      * conflated 丢中间事件不影响统计（插件用前后差值做增量持久化）。
+     * [isPaste] 标记粘贴性质上屏（剪贴板点选/编辑面板提交）：事件照发、
+     * 计数器照常累计（维持单调差值基准），是否计入打字量由订阅插件按 is_paste 决定。
      */
-    fun onTextCommitted(text: String) {
+    fun onTextCommitted(text: String, isPaste: Boolean = false) {
         if (sensitiveInput) return
-        sessionCommittedChars += text.length
+        // 按 Unicode 代码点计数：emoji/生僻字（增补平面代理对）用户感知为 1 个字，
+        // String.length 的 UTF-16 单元会把它们算成 2（"复制12个字统计13"的根源）
+        sessionCommittedChars += text.codePointCount(0, text.length)
         sessionCommits++
         PluginManager.dispatchEvent(
             PluginEvent(
@@ -71,6 +78,7 @@ internal class PluginEventDispatcher(private val service: XimeInputMethodService
                     PluginEvent.FIELD_COMMITTED_TEXT to text,
                     PluginEvent.FIELD_SESSION_TOTAL_CHARS to sessionCommittedChars,
                     PluginEvent.FIELD_SESSION_TOTAL_COMMITS to sessionCommits,
+                    PluginEvent.FIELD_IS_PASTE to isPaste,
                 )
             )
         )
