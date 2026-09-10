@@ -5,10 +5,11 @@
 --   宿主  = 事件投递（conflated 快照）+ InfoPanel 渲染（display: passive）+ action 回调
 --
 -- 事件语义（snake_case）：
---   text_committed: { committed_text, session_total_chars, session_total_commits }
+--   text_committed: { committed_text, session_total_chars, session_total_commits, is_paste }
 --     - session_* 为宿主进程生命周期累计；conflated 丢中间事件不影响统计（差值增量）
 --     - 宿主重启后 session 归零：delta 为负时视为新会话起点
 --     - 插件重载后：last_seen 持久化，首次差值按 0，避免重复累计
+--     - is_paste = 粘贴性质上屏（剪贴板点选/编辑面板提交），不计入打字量
 --   input_changed:  { input_text }  当前编码快照（高频，仅内存不落盘）
 --
 -- 沙箱约束：无 os/io——日期与速度的时间源为 host.crypto.utcTime（UTC），
@@ -182,13 +183,17 @@ function plugin.onPluginEvent(eventType, payload)
       -- 宿主重启（session 归零）：新会话起点，本快照即增量
       delta = sessionChars
     end
-    if delta > 0 then
-      totalChars = totalChars + delta
-      local d = todayStr()
-      daily[d] = (daily[d] or 0) + delta
-      recordSpeed(nowSec(), delta)
+    -- is_paste（键盘剪贴板点选/编辑面板提交）：事件照收以推进差值基准，
+    -- 但粘贴不是打字，不计字数/提交次数/速度
+    if not payload.is_paste then
+      if delta > 0 then
+        totalChars = totalChars + delta
+        local d = todayStr()
+        daily[d] = (daily[d] or 0) + delta
+        recordSpeed(nowSec(), delta)
+      end
+      totalCommits = totalCommits + 1
     end
-    totalCommits = totalCommits + 1
     persist()
   elseif eventType == "input_changed" and payload ~= nil then
     -- 高频事件：只更新内存态，不写盘
