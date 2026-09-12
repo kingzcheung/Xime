@@ -39,6 +39,12 @@ android {
     namespace = "com.kingzcheung.xime"
     compileSdk = 36
 
+    // JVM 单测中未 mock 的 Android 框架方法（如 android.util.Log）返回默认值而非抛异常，
+    // 使服务层状态机（如语音收尾流程）可直接实例化测试
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
+
     defaultConfig {
         applicationId = "com.kingzcheung.xime"
         minSdk = 28

@@ -37,6 +37,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -96,6 +98,10 @@ fun SpeechToTextSettingsContent(
 
     var useLocal by remember {
         mutableStateOf(OfflineAsrSettings.isSupported() && SettingsPreferences.isSttUseLocal(context))
+    }
+
+    var keepEngineAlive by remember {
+        mutableStateOf(SettingsPreferences.isSttKeepEngineAlive(context))
     }
 
     val onlineProviders = remember(activeAsrPluginId) {
@@ -191,11 +197,59 @@ fun SpeechToTextSettingsContent(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 if (useLocal) {
-                    // 本地模型下载/管理卡片
-                    OfflineAsrSettings.ModelSection()
+                    // 引擎常驻开关（仅本地模式显示/生效）：语音结束后保留引擎，闲置后再用免重建。
+                    // 在线插件常驻需保持 WebSocket 长连接（耗电、占用服务端资源），不提供该选项。
+                    // 注意：必须放在 ModelSection 之前——其内部 Column 为 fillMaxSize，
+                    // 放在它后面会被挤出可视区
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surface
+                        ),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "保持引擎常驻",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "语音结束后模型不自动释放（约150MB常驻内存），闲置后再用免重新加载，响应更快",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.7f)
+                                )
+                            }
+                            Switch(
+                                checked = keepEngineAlive,
+                                onCheckedChange = {
+                                    keepEngineAlive = it
+                                    SettingsPreferences.setSttKeepEngineAlive(context, it)
+                                },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = MaterialTheme.colorScheme.primary,
+                                    checkedTrackColor = MaterialTheme.colorScheme.primaryContainer
+                                )
+                            )
+                        }
+                    }
                     Spacer(modifier = Modifier.height(8.dp))
+
+                    // 本地模型下载/管理卡片（内部 fillMaxSize 自滚动，须放在本分支最后）
+                    OfflineAsrSettings.ModelSection()
                 }
             }
+
+            Spacer(modifier = Modifier.height(8.dp))
 
             if (!useLocal) {
                 OnlineAsrTab(

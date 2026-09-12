@@ -10,7 +10,7 @@ import java.io.File
  * ASR 模型管理与选择。
  *
  * 模型推理由自研的 streaming zipformer2 实现（libasr_jni.so）负责。
- * 模型清单与描述来自「模型中心」远程索引（[ModelManager]，category=asr），
+ * 模型清单与描述来自「扩展商店」远程索引（[ModelManager]，category=asr），
  * 索引未加载时回退到内置默认模型（zipformer-zh-int8）。
  */
 class AsrModelManager(private val context: Context) {

@@ -86,6 +86,7 @@ import com.kingzcheung.xime.plugin.core.api.ToolPlugin
 import com.kingzcheung.xime.plugin.core.api.ToolResult
 import com.kingzcheung.xime.plugin.core.lua.PluginEvent
 import com.kingzcheung.xime.plugin.core.runtime.PluginManager
+import com.kingzcheung.xime.speech.AsrBackendFactory
 import com.kingzcheung.xime.speech.RecognitionState
 import com.kingzcheung.xime.rime.RimeConfigHelper
 import com.kingzcheung.xime.rime.RimeEngine
@@ -283,7 +284,7 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
             pendingVoiceAction = null
             action?.invoke()
 
-            endVoiceSession()
+            restoreAfterVoiceFinish()
         },
         onAmplitudeChanged = { amplitude ->
             voiceAmplitudeState.floatValue = amplitude
@@ -295,13 +296,19 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
     )
 
     /**
-     * 结束语音会话的统一出口：提交已识别文本、停止识别与预启动、恢复键盘状态。
-     * 幂等：识别已停止/无文本时各步骤自动跳过。
+     * 结束语音会话的统一出口：停止预启动并进入收尾——等待引擎最终结果后提交，
+     * 超时回退提交部分结果（见 VoiceRecognitionHandler.finishRecognition）。
+     * 键盘状态在收尾完成时经 onVoiceComplete → [restoreAfterVoiceFinish] 恢复，
+     * 期间语音面板保持"正在识别..."显示，避免用户感知到结果被截断。
+     * 幂等：收尾已在进行中时重复调用自动跳过。
      */
     internal fun endVoiceSession() {
-        voiceRecognitionHandler.commitPendingOnRelease()
-        voiceRecognitionHandler.stopRecognition()
         voiceRecognitionHandler.cancelPreStart()
+        voiceRecognitionHandler.finishRecognition()
+    }
+
+    /** 语音会话真正完成（最终结果已提交/超时兜底/出错）后恢复键盘状态。幂等。 */
+    internal fun restoreAfterVoiceFinish() {
         keyboardViewModel.exitVoice()
         isTrackingVoiceButtons = false
         voiceRecordingStarted = false
@@ -386,6 +393,14 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
                 }
                 "stt_enabled" -> {
                     uiState.value = uiState.value.copy(isSttEnabled = SettingsPreferences.isSttEnabled(this@XimeInputMethodService))
+                }
+                SettingsPreferences.KEY_STT_KEEP_ENGINE_ALIVE -> {
+                    // 开启时立即预热模型常驻待命（走 AsrSupport.warmup 注册常驻后端）；
+                    // 关闭时不主动销毁，:asr 服务端按同步到的设置恢复空闲回收，
+                    // 且下一会话开始时 OfflineAsrBackend 会重新同步设置
+                    if (SettingsPreferences.isSttKeepEngineAlive(this@XimeInputMethodService)) {
+                        Thread { AsrBackendFactory.warmup(this@XimeInputMethodService) }.start()
+                    }
                 }
                 SettingsPreferences.KEY_SMART_PREDICTION_ENABLED -> onPredictionSettingChanged()
                 SettingsPreferences.KEY_CLIPBOARD_SYNC_ENABLED -> updateClipboardSync()
@@ -1102,8 +1117,7 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
             onPerformUndo = { pendingVoiceAction = { textCommit.performUndo() } },
             onPerformSearch = { pendingVoiceAction = { textCommit.performSearch() } },
             onStopRecognition = {
-                voiceRecognitionHandler.commitPendingOnRelease()
-                voiceRecognitionHandler.stopRecognition()
+                endVoiceSession()
             },
             isRecording = { voiceRecordingStarted },
             setRecording = { voiceRecordingStarted = it },

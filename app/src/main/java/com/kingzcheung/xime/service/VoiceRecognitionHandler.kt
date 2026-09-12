@@ -22,10 +22,21 @@ class VoiceRecognitionHandler(
     private val onAmplitudeChanged: (Float) -> Unit = {},
     private val onSpectrumChanged: (FloatArray) -> Unit = {},
     /** 语音向输入框写入 composing 文本时回调（标记 composing 区域存在，供 endComposingInputBox 判断）。 */
-    private val onComposingWritten: () -> Unit = {}
+    private val onComposingWritten: () -> Unit = {},
+    /** manager 工厂，供测试注入 mock。 */
+    private val managerFactory: (Context) -> SpeechRecognitionManager = { SpeechRecognitionManager(it) },
+    /** 超时调度器，供测试注入并手动推进。 */
+    private val mainHandler: Handler = Handler(Looper.getMainLooper())
 ) {
     companion object {
         private const val TAG = "VoiceRecognition"
+
+        /**
+         * 松手后等待 ASR 引擎最终结果的超时。在线插件 stop() 只发送结束信号
+         * （finish-task/最后一包标记），服务端处理完尾点才经 WebSocket 异步回调
+         * 最终结果，通常 1~2s；超时仍未收到则回退提交已收到的部分结果。
+         */
+        private const val FINISH_TIMEOUT_MS = 3000L
     }
 
     private lateinit var speechRecognitionManager: SpeechRecognitionManager
@@ -36,7 +47,7 @@ class VoiceRecognitionHandler(
     fun initialize() {
         FileLogger.i(TAG, "Initializing speech recognition system")
 
-        speechRecognitionManager = SpeechRecognitionManager(context)
+        speechRecognitionManager = managerFactory(context)
 
         speechRecognitionManager.setCallbacks(
             onResult = { text ->
@@ -65,7 +76,10 @@ class VoiceRecognitionHandler(
         FileLogger.i(TAG, "STT provider: $providerName")
 
         // 若"使用本地模型"开关已开启，启动时即加载模型并常驻，
-        // 保证语音时绝不现场加载模型（避免丢开头音频）
+        // 保证语音时绝不现场加载模型（避免丢开头音频）。
+        // 注意：keep-alive 预热也走这里（AsrSupport.warmup 注册常驻后端），
+        // 不要再走 manager.preload——那会经 AsrSupport.create 造一个临时后端，
+        // 与本 warmup 并发时双重绑定 :asr、双重加载模型（日志曾见两次 initialize）
         if (SettingsPreferences.isSttUseLocal(context) &&
             AsrBackendFactory.getLocalName() != null
         ) {
@@ -75,7 +89,6 @@ class VoiceRecognitionHandler(
         }
     }
 
-    private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
     private val delayedPreStartRunnable = Runnable {
         if (::speechRecognitionManager.isInitialized) {
             speechRecognitionManager.startPreStart()
@@ -104,6 +117,11 @@ class VoiceRecognitionHandler(
             ))
             return
         }
+
+        // 上一次会话若还在收尾等待中（快速再次开始），直接废弃收尾状态
+        finishing = false
+        mainHandler.removeCallbacks(finishTimeoutRunnable)
+        suppressDuplicateFinal = false
 
         textBeforeVoiceInput = getInputConnection()?.getTextBeforeCursor(1000, 0)?.toString() ?: ""
         textLengthBeforeVoiceInput = textBeforeVoiceInput.length
@@ -155,13 +173,20 @@ class VoiceRecognitionHandler(
     private var smoothedSpectrum = FloatArray(16)
     // 抬起时已提交当前识别文本后，置真以忽略随后可能迟到的重复最终结果
     private var suppressDuplicateFinal = false
+    // 松手收尾中：已停止送音，等待引擎吐出最终结果（超时由 finishTimeoutRunnable 兜底）
+    @Volatile
+    private var finishing = false
     // 输入法窗口隐藏等场景：丢弃本会话，迟到结果不得写入任何输入框
     private var sessionAbandoned = false
     private var errorToast: Toast? = null
 
+    private val finishTimeoutRunnable = Runnable { onFinishTimeout() }
+
     /** 输入法隐藏/切换输入框时调用：丢弃当前会话的未识别文本，忽略迟到的最终结果 */
     fun abandonSession() {
         sessionAbandoned = true
+        finishing = false
+        mainHandler.removeCallbacks(finishTimeoutRunnable)
         lastPartialText = ""
     }
 
@@ -179,8 +204,52 @@ class VoiceRecognitionHandler(
         lastPartialText = ""
     }
 
+    /**
+     * 松手/点按结束语音的收尾入口：停止送音后等待引擎最终结果，而不是立即提交
+     * 部分结果——在线 ASR 需 1~2s 处理尾点，立即提交会把未处理完的语音截断。
+     * 收到最终结果正常提交；超时（[FINISH_TIMEOUT_MS]）才回退提交部分结果。
+     * 完成路径（最终结果/超时/错误）统一经 onVoiceComplete 通知宿主恢复键盘。
+     */
+    fun finishRecognition() {
+        if (!::speechRecognitionManager.isInitialized) return
+        if (finishing) return
+        if (sessionAbandoned) {
+            speechRecognitionManager.stopRecognition()
+            return
+        }
+        if (lastPartialText.isEmpty()) {
+            // 无已识别文本（没说话/极短语音）：无内容可等，直接结束；
+            // 迟到的最终结果仍走正常提交路径（说了话就该上屏）
+            speechRecognitionManager.stopRecognition()
+            onVoiceComplete()
+            return
+        }
+        finishing = true
+        // 收尾期间保持"正在识别..."显示：引擎 stop 过程中的 IDLE 状态由
+        // handleSpeechStateChange 过滤，直到最终结果/超时才结束
+        onStateChanged(getState().copy(voiceRecognitionState = RecognitionState.PROCESSING))
+        mainHandler.removeCallbacks(finishTimeoutRunnable)
+        mainHandler.postDelayed(finishTimeoutRunnable, FINISH_TIMEOUT_MS)
+        speechRecognitionManager.stopRecognition()
+    }
+
+    private fun onFinishTimeout() {
+        if (!finishing) return
+        finishing = false
+        Log.d(TAG, "finish timeout: committing partial result as fallback")
+        // 超时未收到最终结果：提交已收到的部分结果兜底（会话已丢弃时内部直接跳过）
+        commitPendingOnRelease()
+        onVoiceComplete()
+    }
+
     private fun handleSpeechResult(text: String) {
         Log.d(TAG, "Speech result (final): $text")
+
+        if (finishing) {
+            // 收尾中收到最终结果：取消超时兜底，正常提交完整结果
+            finishing = false
+            mainHandler.removeCallbacks(finishTimeoutRunnable)
+        }
 
         if (sessionAbandoned) {
             sessionAbandoned = false
@@ -270,12 +339,16 @@ class VoiceRecognitionHandler(
             suppressDuplicateFinal = false
             sessionAbandoned = false
         }
+        // 收尾等待最终结果期间，引擎 stop 产生的 IDLE 不覆盖"正在识别..."显示
+        if (finishing && state == RecognitionState.IDLE) return
         onStateChanged(getState().copy(voiceRecognitionState = state))
     }
 
     private fun handleSpeechError(error: String, userVisible: Boolean) {
         Log.e(TAG, "Speech error: $error")
         FileLogger.e(TAG, "Speech error: $error")
+        finishing = false
+        mainHandler.removeCallbacks(finishTimeoutRunnable)
         lastPartialText = ""
         if (userVisible && error.isNotBlank()) {
             errorToast?.cancel()

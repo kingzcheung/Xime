@@ -32,6 +32,7 @@ object SettingsPreferences {
     const val KEY_STT_ENABLED = "stt_enabled"
     const val KEY_STT_ONLINE_PLUGIN_ID = "stt_online_plugin_id"
     const val KEY_STT_USE_LOCAL = "stt_use_local"
+    const val KEY_STT_KEEP_ENGINE_ALIVE = "stt_keep_engine_alive"
     const val KEY_STT_DEBUG_RECORD = "stt_debug_record"
     
     /** 默认主题 ID，可从 xime.yaml 的 style.color_scheme 初始化。 */
@@ -412,6 +413,21 @@ object SettingsPreferences {
 
     fun setSttUseLocal(context: Context, useLocal: Boolean) {
         getPrefs(context).edit().putBoolean(KEY_STT_USE_LOCAL, useLocal).apply()
+    }
+
+    /**
+     * 语音结束后是否保持识别引擎常驻（不随会话结束销毁）。
+     * 开启后闲置一段时间再使用无需重新加载引擎，"开始聆听"响应快。
+     * 仅本地（离线）模式生效：模型本就常驻 :asr 进程，保留 wrapper 代价极小；
+     * 在线插件常驻需保持 WebSocket 长连接（耗电、占用服务端资源），不提供常驻。
+     */
+    fun isSttKeepEngineAlive(context: Context): Boolean {
+        return isSttUseLocal(context) &&
+            getPrefs(context).getBoolean(KEY_STT_KEEP_ENGINE_ALIVE, false)
+    }
+
+    fun setSttKeepEngineAlive(context: Context, enabled: Boolean) {
+        getPrefs(context).edit().putBoolean(KEY_STT_KEEP_ENGINE_ALIVE, enabled).apply()
     }
 
     /** 是否把语音识别期间的录音写入文件（调试用）。 */
