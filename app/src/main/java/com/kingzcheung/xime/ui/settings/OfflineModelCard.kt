@@ -138,7 +138,7 @@ internal fun OfflineModelCard() {
                 text = if (downloaded)
                     "本地 Zipformer 流式识别，无网络也能用，识别在独立进程运行。"
                 else
-                    "尚未安装模型，请前往「模型中心」下载「${model.name}」。",
+                    "尚未安装模型，请前往「扩展商店」下载「${model.name}」。",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
