@@ -253,6 +253,7 @@ internal fun PluginCapabilities.toJson(): JsonObject = buildJsonObject {
             "clipboard_sync",
             buildJsonObject {
                 put("protocols", buildJsonArray { c.protocols.forEach { add(JsonPrimitive(it)) } })
+                if (c.attachments) put("attachments", true)
             }
         )
     }
@@ -315,7 +316,8 @@ internal fun JsonObject.toPluginCapabilities(): PluginCapabilities {
         },
         clipboardSync = optObject("clipboard_sync")?.let { c ->
             PluginCapabilities.ClipboardSyncCapabilities(
-                protocols = c.optStrings("protocols").filter { it.isNotBlank() }
+                protocols = c.optStrings("protocols").filter { it.isNotBlank() },
+                attachments = c.optBool("attachments")
             )
         },
         backup = optObject("backup")?.let { b ->

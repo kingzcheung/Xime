@@ -45,6 +45,14 @@ class KeyActionRegistryTest {
     }
 
     @Test
+    fun `newline 固定分发换行键且不携带 value`() {
+        assertEquals(ActionDomain.SERVICE, KeyActionRegistry.fromId("newline")!!.domain)
+        val executor = RecordingExecutor()
+        KeyActionRegistry.execute(GestureAction.NEWLINE, KeyActionContext(executor), "")
+        assertEquals(listOf("newline"), executor.dispatched)
+    }
+
+    @Test
     fun `既有命令已登记为服务域动作`() {
         assertEquals(ActionDomain.SERVICE, KeyActionRegistry.fromCommand("clear_composition")!!.domain)
         assertEquals(ActionDomain.SERVICE, KeyActionRegistry.fromCommand("show_ime_picker")!!.domain)

@@ -4,6 +4,7 @@ import com.kingzcheung.xime.service.PredictionManager
 import android.annotation.SuppressLint
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
@@ -25,12 +26,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.twotone.Image
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -67,17 +70,23 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.kingzcheung.xime.R
+import com.kingzcheung.xime.clipboard.ClipboardItem
 import com.kingzcheung.xime.keyboard.KeyboardPage
 import com.kingzcheung.xime.keyboard.OverlayRoute
 import com.kingzcheung.xime.keyboard.PanelType
 import com.kingzcheung.xime.keyboard.ToolbarAction
 import com.kingzcheung.xime.settings.SettingsPreferences
 import com.kingzcheung.xime.speech.RecognitionState
+import com.kingzcheung.xime.ui.CLIPBOARD_CHIP_MAX_PX
+import com.kingzcheung.xime.ui.rememberClipboardImageRequest
+import java.io.File
 
 @Immutable
 data class CandidateBarVisuals(
@@ -119,6 +128,8 @@ fun CandidateBar(
     voiceSpectrum: FloatArray = FloatArray(16),
     voiceRecognitionState: RecognitionState = RecognitionState.IDLE,
     voicePluginName: String = "",
+    /** 剪贴板图片候选 → 本地文件（null 时渲染占位图标）。 */
+    clipboardImageFileOf: ((ClipboardItem) -> File?)? = null,
 ) {
     val configuration = LocalConfiguration.current
     val isLandscape = !isFloatingMode && configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
@@ -163,6 +174,8 @@ fun CandidateBar(
     val displayCandidates: List<String>
     val displayAssociation: List<String>
     val displayComments: List<String>
+    /** 与 [displayCandidates] 等长：图片候选条目（非图片位为 null）。 */
+    val displayImages: List<ClipboardItem?>
     val hasAnyMore: Boolean
     val showInputTextRow: Boolean
     val showLeftIcon: Boolean
@@ -172,6 +185,7 @@ fun CandidateBar(
             displayCandidates = emptyList()
             displayAssociation = emptyList()
             displayComments = emptyList()
+            displayImages = emptyList()
             hasAnyMore = false
             showLeftIcon = true
         }
@@ -180,6 +194,7 @@ fun CandidateBar(
             // 候选栏按设置的"每页候选词数"显示引擎当前页，可左右滑动查看放不下的候选
             displayCandidates = taken
             displayComments = s.comments
+            displayImages = emptyList()
 
             hasAnyMore = s.hasMore || candidateListState.canScrollForward
             showLeftIcon = false
@@ -221,6 +236,7 @@ fun CandidateBar(
             hasAnyMore = s.hasMore
             showLeftIcon = false
             displayComments = s.comments
+            displayImages = emptyList()
         }
         is CandidateBarState.EnglishCandidates -> {
             displayCandidates = s.candidates.take(20)
@@ -228,9 +244,12 @@ fun CandidateBar(
             displayAssociation = emptyList()
             hasAnyMore = false
             showLeftIcon = false
+            displayImages = emptyList()
         }
         is CandidateBarState.ClipboardDisplay -> {
+            // images 与 candidates 由服务层按同一列表同序构造，take 必须同源同步，否则索引错位
             displayCandidates = s.candidates.take(20)
+            displayImages = s.images.take(20)
             displayComments = emptyList()
             displayAssociation = emptyList()
             hasAnyMore = false
@@ -242,6 +261,7 @@ fun CandidateBar(
             displayAssociation = emptyList()
             hasAnyMore = false
             showLeftIcon = false
+            displayImages = emptyList()
         }
     }
     showInputTextRow = when (page) {
@@ -418,31 +438,52 @@ fun CandidateBar(
             LazyRow(
                 modifier = if (state is CandidateBarState.Idle) Modifier else Modifier.weight(1f),
                 state = candidateListState,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                // 图片候选芯片比文字候选高：居中对齐，避免同排文字候选被顶到上沿
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 itemsIndexed(displayCandidates, key = { index, _ -> index }) { index, candidate ->
-                    CandidateItem(
-                        text = candidate,
-                        index = index,
-                        onClick = { callbacks.onCandidateSelect(index) },
-                        onLongClick = if (callbacks.onCandidateLongPress != null) {
-                            { callbacks.onCandidateLongPress(index) }
-                        } else null,
-                        textColor = visuals.textColor,
-                        comment = if (showComments) {
-                            when (val s = state) {
-                                is CandidateBarState.ChineseCandidates -> s.comments.getOrElse(index) { "" }
-                                is CandidateBarState.EnglishCandidates -> s.comments.getOrElse(index) { "" }
-                                else -> ""
-                            }
-                        } else "",
-                        isSelected = index == 0,
-                        accentColor = visuals.accentColor,
-                        selectedTextColor = visuals.selectedTextColor,
-                        fontSize = candidateTextSize.sp,
-                        candidateFontFamily = candidateFontFamily,
-                        commentFontFamily = commentFontFamily
-                    )
+                    val imageItem = displayImages.getOrNull(index)
+                    if (imageItem != null) {
+                        // 图片候选：Gboard 风格芯片（圆角矩形底 + 圆形缩略图 + "图片"）
+                        ClipboardImageCandidateItem(
+                            file = clipboardImageFileOf?.invoke(imageItem),
+                            isSelected = index == 0,
+                            onClick = { callbacks.onCandidateSelect(index) },
+                            onLongClick = if (callbacks.onCandidateLongPress != null) {
+                                { callbacks.onCandidateLongPress(index) }
+                            } else null,
+                            containerColor = visuals.textColor.copy(alpha = 0.10f),
+                            textColor = visuals.textColor,
+                            accentColor = visuals.accentColor,
+                            dividerColor = visuals.dividerColor,
+                            fontSize = candidateTextSize.sp,
+                            fontFamily = candidateFontFamily,
+                        )
+                    } else {
+                        CandidateItem(
+                            text = candidate,
+                            index = index,
+                            onClick = { callbacks.onCandidateSelect(index) },
+                            onLongClick = if (callbacks.onCandidateLongPress != null) {
+                                { callbacks.onCandidateLongPress(index) }
+                            } else null,
+                            textColor = visuals.textColor,
+                            comment = if (showComments) {
+                                when (val s = state) {
+                                    is CandidateBarState.ChineseCandidates -> s.comments.getOrElse(index) { "" }
+                                    is CandidateBarState.EnglishCandidates -> s.comments.getOrElse(index) { "" }
+                                    else -> ""
+                                }
+                            } else "",
+                            isSelected = index == 0,
+                            accentColor = visuals.accentColor,
+                            selectedTextColor = visuals.selectedTextColor,
+                            fontSize = candidateTextSize.sp,
+                            candidateFontFamily = candidateFontFamily,
+                            commentFontFamily = commentFontFamily
+                        )
+                    }
                 }
 
                 // 仅当左侧存在打字候选时才需要分隔线；纯联想态（无打字候选）下
@@ -631,6 +672,83 @@ fun CandidateBar(
                 }
             }
         }
+    }
+}
+
+/**
+ * 候选栏的**图片候选**芯片（Gboard 剪贴板样式）：
+ * 大圆角矩形底 + 左侧圆形缩略图 + 右侧「图片」二字；整体高度与候选栏行高一致。
+ *
+ * 「图片」只是标注型标签（主角是缩略图），字号取候选字号的 70% 并夹在 11–16sp：
+ * 直接沿用候选字号会比 28dp 缩略图还抢眼，且各机型候选字号档位差异很大。
+ *
+ * [file] 为 null（图片已被配额淘汰/清理）时退化为占位图标，点击仍按图片链路处理
+ * （服务层会提示"图片已不在本地"）。
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun ClipboardImageCandidateItem(
+    file: File?,
+    onClick: () -> Unit,
+    containerColor: Color,
+    textColor: Color,
+    accentColor: Color,
+    dividerColor: Color = Color.Unspecified,
+    isSelected: Boolean = false,
+    fontSize: androidx.compose.ui.unit.TextUnit = 16.sp,
+    fontFamily: androidx.compose.ui.text.font.FontFamily = androidx.compose.ui.text.font.FontFamily.Default,
+    onLongClick: (() -> Unit)? = null,
+) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(
+                if (isSelected) accentColor.copy(alpha = 0.2f) else containerColor
+            )
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .padding(horizontal = 5.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(28.dp)
+                .clip(CircleShape)
+                .background(accentColor.copy(alpha = 0.15f))
+                .then(
+                    if (dividerColor != Color.Unspecified) {
+                        Modifier.border(1.dp, dividerColor, CircleShape)
+                    } else {
+                        Modifier
+                    }
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (file != null) {
+                AsyncImage(
+                    // 显式上限：28dp 圆形缩略图按 128px 方框降采样，不整图解码
+                    model = rememberClipboardImageRequest(file, CLIPBOARD_CHIP_MAX_PX),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.TwoTone.Image,
+                    contentDescription = null,
+                    tint = textColor.copy(alpha = 0.45f),
+                    modifier = Modifier.size(15.dp)
+                )
+            }
+        }
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(
+            text = "图片",
+            color = textColor,
+            // 标注型标签：比候选文字小一档，并夹住上下限（超大字号设置下也不至于撑满芯片）
+            fontSize = (fontSize.value * 0.7f).coerceIn(11f, 16f).sp,
+            fontFamily = fontFamily,
+            maxLines = 1
+        )
     }
 }
 

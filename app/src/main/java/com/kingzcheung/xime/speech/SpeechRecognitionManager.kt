@@ -10,6 +10,7 @@ import android.os.Looper
 import android.util.Log
 
 import androidx.annotation.RequiresPermission
+import com.kingzcheung.xime.plugin.ActivePluginSelection
 import com.kingzcheung.xime.plugin.ExtensionManager
 import com.kingzcheung.xime.settings.SettingsPreferences
 import com.kingzcheung.xime.util.FileLogger
@@ -375,7 +376,11 @@ class SpeechRecognitionManager(private val context: Context) {
         if (enabledPlugins.isEmpty()) return null
 
         val selectedId = SettingsPreferences.getSttOnlinePluginId(context)
-        val selected = enabledPlugins.firstOrNull { it.first == selectedId }
+        // 与插件管理页共用同一判定规则（ActivePluginSelection）：偏好不可用时回退首个已启用插件，
+        // 并回填偏好，避免"识别在跑、插件页显示未使用"
+        val resolvedId = ActivePluginSelection.resolve(selectedId, enabledPlugins.map { it.first })
+        if (resolvedId != selectedId) SettingsPreferences.setSttOnlinePluginId(context, resolvedId)
+        val selected = enabledPlugins.firstOrNull { it.first == resolvedId }
             ?: enabledPlugins.firstOrNull()
         val (_, plugin) = selected ?: return null
 

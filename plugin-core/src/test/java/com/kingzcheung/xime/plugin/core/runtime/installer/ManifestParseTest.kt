@@ -103,6 +103,38 @@ class ManifestParseTest {
     }
 
     @Test
+    fun `clipboard_sync 声明的 attachments 被解析为支持图片附件`() {
+        val content = """
+            {
+              "id": "webdav_sync",
+              "type": "clipboard_sync",
+              "capabilities": {
+                "clipboard_sync": { "protocols": ["webdav"], "attachments": true }
+              }
+            }
+        """.trimIndent()
+
+        val config = (InstallerManager.parseManifestContent(content) as PluginParseResult.Success).config
+        val clipboardSync = config.capabilities?.clipboardSync
+        assertEquals(listOf("webdav"), clipboardSync?.protocols)
+        assertTrue("应解析出 attachments", clipboardSync?.attachments == true)
+    }
+
+    @Test
+    fun `未声明 attachments 时缺省 false（旧插件自动降级为文本同步）`() {
+        val content = """
+            {
+              "id": "legacy_sync",
+              "type": "clipboard_sync",
+              "capabilities": { "clipboard_sync": { "protocols": ["webdav"] } }
+            }
+        """.trimIndent()
+
+        val config = (InstallerManager.parseManifestContent(content) as PluginParseResult.Success).config
+        assertEquals(false, config.capabilities?.clipboardSync?.attachments)
+    }
+
+    @Test
     fun `宽松语法支持尾逗号`() {
         val content = """
             {

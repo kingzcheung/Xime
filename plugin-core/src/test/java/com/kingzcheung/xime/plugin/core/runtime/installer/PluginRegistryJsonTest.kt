@@ -43,7 +43,10 @@ class PluginRegistryJsonTest {
                 requiresNetwork = false
             ),
             tool = PluginCapabilities.ToolCapabilities(display = ToolResult.PASSIVE),
-            clipboardSync = PluginCapabilities.ClipboardSyncCapabilities(protocols = listOf("webdav")),
+            clipboardSync = PluginCapabilities.ClipboardSyncCapabilities(
+                protocols = listOf("webdav"),
+                attachments = true
+            ),
             backup = PluginCapabilities.BackupCapabilities(protocols = listOf("webdav")),
             events = listOf("input_changed", "text_committed"),
             candidateTransform = true,
@@ -76,6 +79,20 @@ class PluginRegistryJsonTest {
         assertTrue("candidate_transform 应为 snake_case", text.contains("\"candidate_transform\": true"))
         assertTrue("quick_send_read 应为 snake_case", text.contains("\"quick_send_read\": true"))
         assertTrue("clipboard_read 应为 snake_case", text.contains("\"clipboard_read\": true"))
+        assertTrue("attachments 应随 clipboard_sync 一起持久化", text.contains("\"attachments\": true"))
+    }
+
+    @Test
+    fun `未声明 attachments 的旧注册表读回为 false`() {
+        val legacy = """
+            {"version":1,"plugins":[{"id":"old","name":"旧插件","type":"clipboard_sync",
+              "path":"/tmp/old/main.js","versionName":"1.0.0",
+              "capabilities":{"clipboard_sync":{"protocols":["webdav"]}}}]}
+        """.trimIndent()
+        val decoded = decodeRegistryJson(legacy)
+        val cs = decoded.single().capabilities?.clipboardSync
+        assertEquals(listOf("webdav"), cs?.protocols)
+        assertEquals("缺省应为 false（宿主导入为文本-only）", false, cs?.attachments)
     }
 
     @Test

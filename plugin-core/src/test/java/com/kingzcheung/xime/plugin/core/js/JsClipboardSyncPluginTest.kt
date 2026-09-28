@@ -123,7 +123,12 @@ class JsClipboardSyncPluginTest {
         val adapter = newAdapter(store, MockHttpHostApi())
         val schema = adapter.getSettingsSchema()
         assertTrue("应导出 settings.schema", schema.isNotEmpty())
-        assertEquals(4, schema.size)
+        assertEquals(5, schema.size)
+        // 拉取间隔由宿主引擎消费（configStore key 契约），插件 schema 必须声明同名 NUMBER 字段
+        assertEquals(
+            "pull_interval_seconds",
+            schema.first { it.label?.contains("拉取最小间隔") == true }.key
+        )
     }
 
     @Test

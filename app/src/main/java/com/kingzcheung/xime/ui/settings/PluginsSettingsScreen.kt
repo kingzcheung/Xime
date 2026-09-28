@@ -90,6 +90,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kingzcheung.xime.BuildConfig
+import com.kingzcheung.xime.plugin.ActivePluginSelection
 import com.kingzcheung.xime.plugin.ExtensionManager
 import com.kingzcheung.xime.plugin.core.api.PluginIcon
 import com.kingzcheung.xime.plugin.core.model.Activation
@@ -271,8 +272,21 @@ fun PluginsSettingsContent(
                         }
                     }
                 } else {
-                    val activeAsrPluginId = SettingsPreferences.getSttOnlinePluginId(context)
-                    val activeClipboardSyncPluginId = SettingsPreferences.getClipboardSyncPluginId(context)
+                    // 单选类插件的"当前使用中"必须与**引擎同一套规则**（ActivePluginSelection）：
+                    // 引擎在偏好为空/指向已卸载插件时会回退到"首个已启用插件"，
+                    // 页面若只比较持久化偏好，就会出现"同步在跑、这里却显示未使用"。
+                    val activeAsrPluginId = ActivePluginSelection.resolve(
+                        SettingsPreferences.getSttOnlinePluginId(context),
+                        ExtensionManager.getEnabledAsrPlugins(context).map { it.first }
+                    )
+                    val activeClipboardSyncPluginId = ActivePluginSelection.resolve(
+                        SettingsPreferences.getClipboardSyncPluginId(context),
+                        ExtensionManager.getEnabledClipboardSyncPlugins(context).map { it.first }
+                    )
+                    val activeBackupPluginId = ActivePluginSelection.resolve(
+                        SettingsPreferences.getBackupPluginId(context),
+                        ExtensionManager.getEnabledBackupPlugins(context).map { it.first }
+                    )
                     items(uiState.extensions, key = { it.id }) { extension ->
                         ExtensionItem(
                             extension = extension,
@@ -287,7 +301,7 @@ fun PluginsSettingsContent(
                                 PluginCategory.CLIPBOARD_SYNC ->
                                     extension.id == activeClipboardSyncPluginId
                                 PluginCategory.BACKUP ->
-                                    extension.id == SettingsPreferences.getBackupPluginId(context)
+                                    extension.id == activeBackupPluginId
                                 else -> false
                             },
                             onActivate = when (extension.category) {

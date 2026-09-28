@@ -308,7 +308,7 @@ fun KeyboardView(
                 cs.candidates, cs.candidateComments, cs.inputText, cs.preeditText, cs.isComposing,
                 cs.associationCandidates, cs.pendingEnglishText, cs.isShowingRecentClipboard, cs.hasNextPage,
                 state.isCalculatorMode, handwritingCandidates, handwritingComments, showHandwritingCandidates,
-                railExpanded, cs.preeditCaretPos,
+                railExpanded, cs.preeditCaretPos, state.recentClipboardItems,
             ) {
                 if (showHandwritingCandidates) {
                     CandidateBarState.AssociationOnly(
@@ -332,6 +332,12 @@ fun KeyboardView(
                         hasNextPage = cs.hasNextPage,
                         isCalculatorActive = state.isCalculatorMode,
                         preeditCaretPos = cs.preeditCaretPos,
+                        // 剪贴板态：与 cs.candidates 同序同长，非图片位为 null（展开态数据源不同则不带图片）
+                        clipboardImages = if (cs.isShowingRecentClipboard && railExpanded.isEmpty()) {
+                            state.recentClipboardItems.map { if (it.isImage) it else null }
+                        } else {
+                            emptyList()
+                        },
                     )
                 }
             }
@@ -392,6 +398,8 @@ fun KeyboardView(
                 page = page,
                 candidatePageExpanded = candidatePageExpanded,
                 isFloatingMode = state.isFloatingMode,
+                // 候选栏图片候选的缩略图文件（不存在返回 null → 渲染占位图标）
+                clipboardImageFileOf = { item -> viewModel.clipboardManager.imageFileOf(item) },
                 isVoiceSticky = state.voiceSticky,
                 voiceAmplitude = voiceAmplitudeState.value,
                 voiceSpectrum = voiceSpectrumState.value,
@@ -1366,6 +1374,11 @@ fun KeyboardView(
                             callbacks.onClipboardSelect?.invoke(text)
                             viewModel.closeOverlay()
                         },
+                        onSelectImage = { item ->
+                            callbacks.onClipboardImageSelect?.invoke(item)
+                            viewModel.closeOverlay()
+                        },
+                        imageFileOf = { item -> viewModel.clipboardManager.imageFileOf(item) },
                         onSplitWords = { text, _ -> viewModel.pushOverlay(OverlayRoute.SplitWords(text)) },
                         onBack = { viewModel.closeOverlay() },
                         onClipboardTabChange = { viewModel.pushOverlay(OverlayRoute.Clipboard(it)) },

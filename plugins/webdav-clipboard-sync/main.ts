@@ -13,18 +13,21 @@
 //   文件   {davUrl}/{remotePath}/clipboard/current.json
 //          davUrl = 服务器根（如 https://dav.jianguoyun.com/dav/）
 //          remotePath = 远程目录（如 xime，留空为根目录）
+//   附件   {davUrl}/{remotePath}/clipboard/blobs/{data_name}（图片原图，Phase 3 / D12）
 //   push   PUT 文件，body = Profile JSON（Content-Type: application/json）
+//          有附件时**先 PUT blob、再 PUT JSON**（顺序反了会留下指向缺失 blob 的悬空引用）
 //          目录不存在（409；部分服务器如 Alist/Nextcloud 返回 404）
 //          → 逐级 MKCOL 创建后重试
 //   pull   GET 文件，If-None-Match（ETag 缓存，ximed 无此优化，插件增强保留），
 //          304 → 无变更；404 → 远端尚无文件；200 → 解析 Profile JSON
+//          带附件（has_data）时再 GET blob，字节取 resp.body（resp.text 会毁掉二进制）
 //   兼容   远端若为旧版纯文本（无 JSON 结构），按纯文本 profile 处理
 //   认证   Authorization: Basic base64(user:pass)
 //
 // JS 约定：JSON 用原生 JSON（宿主不再提供 host.json；JSON.parse 非法输入抛异常，
 // 用 try/catch 保持原 decode 失败返回 null 的语义）；body/base64 一律传 Uint8Array。
 
-import { buildDirUrl, buildFileUrl, relativeDirParts, stripTrailingSlashes } from './libs/dav-url';
+import { buildBlobUrl, buildDirUrl, buildFileUrl, relativeDirParts, stripTrailingSlashes } from './libs/dav-url';
 
 const KEY_DAV_URL = 'davUrl';
 const KEY_REMOTE_PATH = 'remotePath';
@@ -44,9 +47,16 @@ let pushSkipCount = 0;
 
 // ================= 工具函数 =================
 
+// 去除 \r\n：用户名/密码可能因配置或粘贴带入换行，若不清除会进入 base64 凭据，
+// 导致部分不对换行做特殊处理的 WebDAV 服务器认证失败（典型：凭据末尾多一个 \n）。
+function stripNewlines(value: string): string {
+  return value.replace(/[\r\n]/g, '');
+}
+
 function basicAuthHeader(username: string, password: string): string {
-  const credential = new TextEncoder().encode(username + ':' + password);
-  return 'Basic ' + host.crypto.base64(credential);
+  const credential = new TextEncoder().encode(stripNewlines(username) + ':' + stripNewlines(password));
+  // base64 结果同样清理换行，保证 Authorization 请求头是单行值
+  return 'Basic ' + stripNewlines(host.crypto.base64(credential));
 }
 
 function buildHeaders(): Record<string, string> {
@@ -105,6 +115,119 @@ function cacheEtag(resp: XimeHttpResponse | null): void {
   }
 }
 
+// ================= 附件（图片原图，Phase 3 / D12） =================
+
+/** 扩展名 → Content-Type（图片原图直传，不压缩；未知类型退化为二进制流）。 */
+const EXT_CONTENT_TYPE: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  bmp: 'image/bmp',
+  heic: 'image/heic',
+  heif: 'image/heic',
+  avif: 'image/avif',
+};
+
+function contentTypeOf(dataName: string | null): string {
+  if (dataName === null || dataName === undefined) return 'application/octet-stream';
+  const dot = dataName.lastIndexOf('.');
+  if (dot < 0) return 'application/octet-stream';
+  return EXT_CONTENT_TYPE[dataName.substring(dot + 1).toLowerCase()] || 'application/octet-stream';
+}
+
+// 上传附件字节到 {clipboard}/blobs/{data_name}。
+// blob 名即内容 hash ⇒ 重复 PUT 幂等，**不做 HEAD 预检**（省一次请求，避开 503 限流）。
+// 返回 true 才允许写 current.json：绝不留下"JSON 指向不存在 blob"的悬空引用。
+async function putBlob(profile: XimeClipboardProfile): Promise<boolean> {
+  const data = profile.data;
+  if (data === null || data === undefined || data.length === 0) {
+    host.logError('push failed: has_data 为真但没有附件字节');
+    return false;
+  }
+  const url = buildBlobUrl(
+    host.config.get(KEY_DAV_URL) || '',
+    host.config.get(KEY_REMOTE_PATH) || '',
+    profile.dataName
+  );
+  if (url === null) {
+    host.logError('push failed: 附件名非法或未配置服务器地址');
+    return false;
+  }
+  const headers = buildHeaders();
+  headers['Content-Type'] = contentTypeOf(profile.dataName);
+  let resp: XimeHttpResponse;
+  try {
+    resp = await host.http.request('PUT', url, headers, data);
+  } catch (e) {
+    host.logError('push failed: 附件上传请求失败 ' + ((e as Error).message || ''));
+    return false;
+  }
+  if (resp.status === 503) {
+    pushSkipCount = PUSH_BACKOFF_SKIPS;
+    host.logError('push failed: 附件上传 HTTP 503 服务器限流，跳过接下来 ' + PUSH_BACKOFF_SKIPS + ' 次推送');
+    return false;
+  }
+  if (resp.status >= 200 && resp.status < 300) {
+    host.log('push ok: PUT blob ' + url + ' -> ' + resp.status + ' (' + data.length + ' bytes)');
+    return true;
+  }
+  // 目录不存在（409 / 部分服务器 404）→ 逐级 MKCOL 后重试一次
+  if (resp.status === 409 || resp.status === 404) {
+    host.log('push: blob ' + resp.status + ' 目录不存在，尝试 MKCOL 创建');
+    if (await ensureDirectories(url)) {
+      const retry = await host.http.request('PUT', url, headers, data);
+      if (retry.status >= 200 && retry.status < 300) {
+        host.log('push ok: blob MKCOL 后重试成功 -> ' + retry.status);
+        return true;
+      }
+      host.logError('push failed: blob MKCOL 后重试失败 HTTP ' + retry.status);
+      return false;
+    }
+    host.logError('push failed: blob 目录创建失败');
+    return false;
+  }
+  host.logError('push failed: PUT blob ' + url + ' -> HTTP ' + resp.status);
+  return false;
+}
+
+// 下载附件字节。**必须用 resp.body**：resp.text 会把二进制按 UTF-8 解码，
+// 图片字节会被替换字符破坏（且不可逆）。
+async function fetchBlob(profile: XimeClipboardProfile): Promise<Uint8Array | null> {
+  const url = buildBlobUrl(
+    host.config.get(KEY_DAV_URL) || '',
+    host.config.get(KEY_REMOTE_PATH) || '',
+    profile.dataName
+  );
+  if (url === null) {
+    host.logError('pull failed: 附件名非法或未配置服务器地址');
+    return null;
+  }
+  let resp: XimeHttpResponse;
+  try {
+    resp = await host.http.request('GET', url, buildHeaders(), null);
+  } catch (e) {
+    host.logError('pull failed: 附件下载请求失败 ' + ((e as Error).message || ''));
+    return null;
+  }
+  if (resp.status === 503) {
+    pullSkipCount = PULL_BACKOFF_SKIPS;
+    host.logError('pull failed: 附件下载 HTTP 503 服务器限流，跳过接下来 ' + PULL_BACKOFF_SKIPS + ' 次拉取');
+    return null;
+  }
+  if (resp.status < 200 || resp.status >= 300) {
+    host.logError('pull failed: GET blob ' + url + ' -> HTTP ' + resp.status);
+    return null;
+  }
+  const body = resp.body;
+  if (body === null || body === undefined || body.length === 0) {
+    host.logError('pull failed: 远端附件为空');
+    return null;
+  }
+  return body;
+}
+
 const plugin = definePlugin({
   // ================= 生命周期 =================
 
@@ -147,6 +270,18 @@ const plugin = definePlugin({
           required: false,
         },
         {
+          // 拉取间隔由宿主引擎消费（键盘弹出时节流），插件自身不读取
+          key: 'pull_interval_seconds',
+          label: '拉取最小间隔（秒）',
+          type: 'number',
+          defaultValue: '30',
+          placeholder: '30',
+          helpText: '键盘每次弹出时拉取远端的最小间隔，范围 1~600，默认 30。' +
+            '连续复制场景可调小（如 1 秒，仅作防抖）；' +
+            '坚果云免费版每 30 分钟限 600 次请求，调小易触发 503 限流',
+          required: false,
+        },
+        {
           key: 'testConnection',
           label: '测试连接',
           type: 'button',
@@ -170,6 +305,14 @@ const plugin = definePlugin({
       if (url === null) {
         host.logError('push failed: 未配置服务器地址');
         return false;
+      }
+      // 附件先行：blob 没写成功就绝不写 JSON（否则对端会拉到"有元数据、无图"的空条目）
+      if (profile.hasData) {
+        const uploaded = await putBlob(profile);
+        if (!uploaded) {
+          host.logError('push failed: 附件未上传成功，跳过 Profile JSON');
+          return false;
+        }
       }
       const headers = buildHeaders();
       headers['Content-Type'] = 'application/json';
@@ -277,19 +420,36 @@ const plugin = definePlugin({
           decoded = null;
         }
         if (decoded !== null && decoded !== undefined && typeof decoded === 'object'
-          && (decoded as { text?: unknown }).text !== null
-          && (decoded as { text?: unknown }).text !== undefined) {
-          // 新版 JSON Profile（wire 为 snake_case，与 ximed Profile 同构）→ SDK profile（camelCase）
+          && !Array.isArray(decoded)) {
           const w = decoded as Record<string, unknown>;
-          return {
-            type: w.type === undefined || w.type === null ? 'text' : String(w.type),
-            hash: w.hash === undefined || w.hash === null ? '' : String(w.hash),
-            text: w.text === undefined || w.text === null ? '' : String(w.text),
-            hasData: w.has_data === true,
-            dataName: w.data_name === undefined || w.data_name === null ? null : String(w.data_name),
-            size: typeof w.size === 'number' ? w.size : 0,
-            source: w.source === undefined || w.source === null ? null : String(w.source),
-          };
+          const hasData = w.has_data === true;
+          const hasTextKey = w.text !== null && w.text !== undefined;
+          // 图片记录**没有 text 键**（只有 has_data）：必须一起判，
+          // 否则会掉进下面的纯文本兼容分支，把整段 JSON 当剪贴板文本写回本地。
+          if (hasData || hasTextKey) {
+            // 新版 JSON Profile（wire 为 snake_case，与 ximed Profile 同构）→ SDK profile（camelCase）
+            const profile: XimeClipboardProfile = {
+              type: w.type === undefined || w.type === null ? 'text' : String(w.type),
+              hash: w.hash === undefined || w.hash === null ? '' : String(w.hash),
+              text: w.text === undefined || w.text === null ? '' : String(w.text),
+              hasData: hasData,
+              dataName: w.data_name === undefined || w.data_name === null ? null : String(w.data_name),
+              size: typeof w.size === 'number' ? w.size : 0,
+              source: w.source === undefined || w.source === null ? null : String(w.source),
+            };
+            if (hasData) {
+              const blob = await fetchBlob(profile);
+              if (blob === null) {
+                // 附件还没传上来（push 先 blob 后 json 的中间态）或下载失败：
+                // 清掉 ETag，下一轮重新拉 JSON 再试；否则 304 会让这次失败变成永久跳过
+                host.config.remove(KEY_LAST_ETAG);
+                return null;
+              }
+              profile.data = blob;
+              host.log('pull ok: 附件 ' + (profile.dataName || '') + ' (' + blob.length + ' bytes)');
+            }
+            return profile;
+          }
         }
         // 兼容旧版纯文本文件：按纯文本构造 profile，hash 留空让宿主计算
         host.log('pull: 远端非 JSON，按纯文本兼容处理');

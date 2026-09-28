@@ -91,6 +91,17 @@ const plugin = definePlugin({
           required: false,
         },
         {
+          // 拉取间隔由宿主引擎消费（键盘弹出时节流），插件自身不读取
+          key: 'pull_interval_seconds',
+          label: '拉取最小间隔（秒）',
+          type: 'number',
+          defaultValue: '30',
+          placeholder: '30',
+          helpText: '键盘每次弹出时拉取远端的最小间隔，范围 1~600，默认 30。' +
+            '自建服务器无严格限流时可调小（如 1 秒，仅作防抖）',
+          required: false,
+        },
+        {
           key: 'testConnection',
           label: '测试连接',
           type: 'button',

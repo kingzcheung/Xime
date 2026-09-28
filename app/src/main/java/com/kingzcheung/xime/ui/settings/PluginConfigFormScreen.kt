@@ -73,7 +73,9 @@ fun PluginConfigFormScreen(
     pluginName: String,
     schema: List<UiNode> = emptyList(),
     onBack: () -> Unit,
-    embedded: Boolean = false
+    embedded: Boolean = false,
+    /** 字段未声明 section 时的分组标题（默认「插件配置」）；嵌入到多插件页面时可带上插件名标明归属。 */
+    fallbackSectionTitle: String = "插件配置",
 ) {
     val context = LocalContext.current
     val configStore = remember(pluginId) {
@@ -101,7 +103,7 @@ fun PluginConfigFormScreen(
     @Composable
     fun sectionContent(section: String, sectionFields: List<UiNode>) {
         SettingsSection(
-            title = section.ifBlank { "插件配置" },
+            title = section.ifBlank { fallbackSectionTitle },
             content = {
                 Column(
                     modifier = Modifier.padding(16.dp),

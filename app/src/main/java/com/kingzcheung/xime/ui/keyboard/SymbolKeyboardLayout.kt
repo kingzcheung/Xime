@@ -61,7 +61,8 @@ fun SymbolKeyboardLayout(
     onHapticFeedback: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
-    // 最近使用（LRU）：作为第一个分类页，点击符号时置顶记录
+    // 最近使用（LRU）：作为第一个分类页。该页内点按不重排 UI（保持位置稳定，便于连续输入同一符号）；
+    // 只有在其它分类页点按符号时才记录使用并置顶，切入最近使用页即为最新顺序。
     var recentSymbols by remember {
         mutableStateOf(RecentUsageStore.get(context, RecentUsageStore.KEY_RECENT_SYMBOLS))
     }
@@ -159,9 +160,14 @@ fun SymbolKeyboardLayout(
                                 SymbolButton(
                                     symbol = symbol,
                                     onClick = {
-                                        recentSymbols = RecentUsageStore.record(
-                                            context, RecentUsageStore.KEY_RECENT_SYMBOLS, symbol
-                                        )
+                                        // 最近使用页（第 0 页）内的点按不参与排序：保持位置稳定，
+                                        // 便于在同一位置连续输入同一符号（如英文三种引号）。
+                                        // 仅其它分类页的点按才记录使用并置顶，切入最近使用页即为最新顺序。
+                                        if (page != 0) {
+                                            recentSymbols = RecentUsageStore.record(
+                                                context, RecentUsageStore.KEY_RECENT_SYMBOLS, symbol
+                                            )
+                                        }
                                         onSelect(symbol)
                                     },
                                     modifier = Modifier.weight(1f),

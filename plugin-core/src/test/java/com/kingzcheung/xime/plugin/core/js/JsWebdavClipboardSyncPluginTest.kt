@@ -36,6 +36,8 @@ class JsWebdavClipboardSyncPluginTest {
     private class MockHttpHostApi : HttpHostApi {
         val requests = mutableListOf<Triple<String, String, Map<String, String>>>()
         val requestBodies = mutableListOf<String>()
+        /** 原始字节：图片附件必须按字节断言（UTF-8 文本化会丢信息） */
+        val requestBodyBytes = mutableListOf<ByteArray?>()
         val responseQueue = ArrayDeque<HttpResponse>()
         var lastErrorMsg: String? = null
 
@@ -48,6 +50,7 @@ class JsWebdavClipboardSyncPluginTest {
         ): HttpResponse? {
             requests.add(Triple(method, url, headers))
             requestBodies.add(body?.toString(Charsets.UTF_8) ?: "")
+            requestBodyBytes.add(body)
             return responseQueue.removeFirstOrNull()
         }
 
@@ -126,7 +129,12 @@ class JsWebdavClipboardSyncPluginTest {
         val adapter = newAdapter(store, MockHttpHostApi())
         val schema = adapter.getSettingsSchema()
         assertTrue("应导出 settings.schema", schema.isNotEmpty())
-        assertEquals(5, schema.size)
+        assertEquals(6, schema.size)
+        // 拉取间隔由宿主引擎消费（configStore key 契约），插件 schema 必须声明同名 NUMBER 字段
+        assertEquals(
+            "pull_interval_seconds",
+            schema.first { it.label?.contains("拉取最小间隔") == true }.key
+        )
     }
 
     @Test
@@ -360,5 +368,87 @@ class JsWebdavClipboardSyncPluginTest {
         val adapter = newAdapter(InMemoryConfigStore(), MockHttpHostApi())
         val result = runBlocking { adapter.pull() }
         assertNull("未配置时应返回 null", result)
+    }
+
+    // ============================================================
+    // 图片附件（Phase 3 / D12）：blob 先传后写 JSON；拉取用二进制 body
+    // 这里跑的是**真实插件产物**（QuickJS），与 xipm test 互为双保险
+    // ============================================================
+
+    private fun imageBytes() = byteArrayOf(0x89.toByte(), 0x50, 0x4e, 0x47, 1, 2, 3, 4)
+
+    @Test
+    fun `push image uploads blob first then metadata json`() {
+        val store = InMemoryConfigStore()
+        store.set("davUrl", "https://192.168.1.50:8080/dav/")
+        val http = MockHttpHostApi()
+        http.responseQueue.addLast(HttpResponse(201)) // blob
+        http.responseQueue.addLast(HttpResponse(201)) // metadata
+        val adapter = newAdapter(store, http)
+        val bytes = imageBytes()
+        val profile = ClipboardProfile.fromImage(bytes, "png", source = "device-a")
+
+        val ok = runBlocking { adapter.push(profile) }
+
+        assertTrue("push 应成功", ok)
+        assertEquals(2, http.requests.size)
+        assertEquals("PUT", http.requests[0].first)
+        assertEquals(
+            "附件必须先写 blob",
+            "https://192.168.1.50:8080/dav/clipboard/blobs/${profile.dataName}",
+            http.requests[0].second
+        )
+        assertEquals("image/png", http.requests[0].third["Content-Type"])
+        assertTrue("附件应原样按字节上传", http.requestBodyBytes[0]!!.contentEquals(bytes))
+        assertEquals(
+            "https://192.168.1.50:8080/dav/clipboard/current.json",
+            http.requests[1].second
+        )
+        val json = http.requestBodies[1]
+        assertTrue("metadata 应声明 has_data: $json", json.contains("\"has_data\":true"))
+        assertTrue("metadata 应带附件名: $json", json.contains(profile.dataName!!))
+        assertFalse("附件字节不应写进 JSON: $json", json.contains("\"data\""))
+    }
+
+    @Test
+    fun `push image skips metadata json when blob upload fails`() {
+        val store = InMemoryConfigStore()
+        store.set("davUrl", "https://192.168.1.50:8080/dav/")
+        val http = MockHttpHostApi()
+        http.responseQueue.addLast(HttpResponse(500)) // blob 失败
+        val adapter = newAdapter(store, http)
+
+        val ok = runBlocking { adapter.push(ClipboardProfile.fromImage(imageBytes(), "png")) }
+
+        assertFalse("blob 失败时 push 必须失败", ok)
+        assertEquals("不应写出指向缺失附件的 JSON", 1, http.requests.size)
+        assertTrue(http.requests[0].second.endsWith("/clipboard/blobs/${ClipboardProfile.fromImage(imageBytes(), "png").dataName}"))
+    }
+
+    @Test
+    fun `pull image downloads blob bytes`() {
+        val store = InMemoryConfigStore()
+        store.set("davUrl", "https://192.168.1.50:8080/dav/")
+        val http = MockHttpHostApi()
+        val bytes = imageBytes()
+        val hash = ClipboardProfile.sha256Hex(bytes)
+        val metadata = """{"type":"image","hash":"$hash","text":"","has_data":true,""" +
+            """"data_name":"$hash.png","size":${bytes.size},"source":"device-a"}"""
+        http.responseQueue.addLast(HttpResponse(200, mapOf("ETag" to "img-etag"), metadata.toByteArray()))
+        http.responseQueue.addLast(HttpResponse(200, mapOf("Content-Type" to "image/png"), bytes))
+        val adapter = newAdapter(store, http)
+
+        val profile = runBlocking { adapter.pull() }
+
+        assertNotNull("应解析出图片 profile", profile)
+        assertTrue("应标记有附件", profile!!.hasData)
+        assertEquals("$hash.png", profile.dataName)
+        assertEquals(hash, profile.hash)
+        assertEquals("", profile.text)
+        assertTrue("附件字节应无损回传（不能用 resp.text）", profile.data!!.contentEquals(bytes))
+        assertEquals(
+            "https://192.168.1.50:8080/dav/clipboard/blobs/$hash.png",
+            http.requests[1].second
+        )
     }
 }

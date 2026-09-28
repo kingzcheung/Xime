@@ -87,7 +87,8 @@ fun EmojiKeyboardLayout(
     val pluginCategories = allCategories.filter { it.isPlugin }
     val builtinCategories = allCategories.filter { !it.isPlugin }
 
-    // 最近使用（LRU）：作为内置分区的第一个子分类页，点击 emoji 时置顶记录
+    // 最近使用（LRU）：作为内置分区的第一个子分类页。该页内点按不重排 UI（保持位置稳定），
+    // 只有其它分类页点按 emoji 时才记录使用并置顶，切入最近使用页即为最新顺序。
     var recentEmojis by remember {
         mutableStateOf(RecentUsageStore.get(context, RecentUsageStore.KEY_RECENT_EMOJIS))
     }
@@ -399,9 +400,13 @@ fun EmojiKeyboardLayout(
                                 EmojiButton(
                                     emoji = emoji,
                                     onClick = {
-                                        recentEmojis = RecentUsageStore.record(
-                                            context, RecentUsageStore.KEY_RECENT_EMOJIS, emoji
-                                        )
+                                        // 最近使用页（第 0 页）内的点按不参与排序：保持位置稳定，
+                                        // 便于在同一位置连续输入；仅其它分类页点按才记录使用并置顶。
+                                        if (pageIndex != 0) {
+                                            recentEmojis = RecentUsageStore.record(
+                                                context, RecentUsageStore.KEY_RECENT_EMOJIS, emoji
+                                            )
+                                        }
                                         onEmojiSelect(emoji)
                                     },
                                     modifier = Modifier.weight(1f)

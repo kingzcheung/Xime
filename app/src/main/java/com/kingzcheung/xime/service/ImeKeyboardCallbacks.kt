@@ -114,6 +114,7 @@ internal fun rememberImeKeyboardCallbacks(
             onToggleDarkMode = { service.toggleDarkMode() },
             onClipboard = {},
             onClipboardSelect = { text -> service.textCommit.selectClipboardItem(text) },
+            onClipboardImageSelect = { item -> service.textCommit.selectClipboardImage(item) },
             onClipboardPullRemote = { service.clipboardSyncBridge?.pullOnce() },
             onCommitText = { text -> service.textCommit.commitClipboardText(text) },
             onDeleteText = { count -> service.textCommit.deleteClipboardChars(count) },

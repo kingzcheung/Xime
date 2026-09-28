@@ -361,7 +361,7 @@ color_schemes:
 #             commit（输出 value 直接上屏，swipe/长按的默认）,
 #             command（内置命令，value 为命令名）,
 #             select_all, copy, cut, paste, line_start, line_end, undo, none, repeat,
-#             功能键：delete, enter, space, repeat_space（value 为次数，默认 5），
+#             功能键：delete, enter, newline（固定换行，无视编辑器回车动作）, space, repeat_space（value 为次数，默认 5），
 #                     clear_all, undo_clear, toggle_ascii, toggle_symbols, toggle_shift,
 #                     voice（进入语音输入）, switch_route（value: emoji|symbol|clipboard）
 #     command 可用命令：

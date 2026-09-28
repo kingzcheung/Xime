@@ -330,19 +330,30 @@ interface XimeSpeechExtension {
 // 扩展点：clipboardSync（剪贴板同步）
 // ============================================================
 
-/** 剪贴板同步 profile（push/pull 的交换对象，字段 camelCase）。 */
+/**
+ * 剪贴板同步 profile（push/pull 的交换对象，字段 camelCase）。
+ *
+ * 文本条目：`type="text"`、`hasData=false`、`text` 为内容本身、`hash=sha256(utf8(text))`。
+ *
+ * **图片条目**：`type="image"`、`text=""`（**不能**据此判空，须同时看 `hasData`）、
+ * `hasData=true`、`data` 为原图字节、`hash=sha256(原图字节)`、`dataName="<hash>.<ext>"`
+ * （内容寻址 ⇒ 同一张图在任何设备 hash 相同，重复 PUT 幂等）。
+ * 远端 blob 位置由插件自行约定（webdav 插件为 `clipboard/blobs/<dataName>`）。
+ */
 interface XimeClipboardProfile {
   type: string;
   hash: string;
   text: string;
   hasData: boolean;
   dataName: string | null;
+  /** 附件字节（图片原图，宿主不压缩）；无附件或未下载成功为 null/undefined。 */
+  data?: Uint8Array | null;
   size: number;
   source: string | null;
 }
 
 interface XimeClipboardSyncExtension {
-  /** 推送本地剪贴板（resolve 是否成功；可 await 网络 IO）。 */
+  /** 推送本地剪贴板（resolve 是否成功；可 await 网络 IO；有附件时先把 `data` 写远端再更新元数据）。 */
   push(profile: XimeClipboardProfile): boolean | Promise<boolean>;
   /** 拉取远端（resolve null = 无变更/失败；可 await 网络 IO）。 */
   pull(): XimeClipboardProfile | null | Promise<XimeClipboardProfile | null>;

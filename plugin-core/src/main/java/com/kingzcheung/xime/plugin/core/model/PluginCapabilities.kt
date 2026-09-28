@@ -115,6 +115,13 @@ data class PluginCapabilities(
     /** clipboard_sync 剪贴板同步能力声明。 */
     data class ClipboardSyncCapabilities(
         val protocols: List<String> = emptyList(),
+        /**
+         * 是否支持**附件**（图片 blob 传输，Phase 3 / 决策 D12）。
+         *
+         * 未声明的插件（含所有旧插件）恒为 false：宿主不推送图片条目、跳过拉到的图片 profile，
+         * 文本同步完全不受影响——这是**优雅降级**而非静默失败。
+         */
+        val attachments: Boolean = false,
     )
 
     /** backup 备份能力声明：宿主负责备份包生成/恢复，插件只承载传输协议。 */

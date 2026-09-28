@@ -38,6 +38,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -81,6 +82,7 @@ import com.kingzcheung.xime.viewmodel.KeyboardViewModel
 import com.kingzcheung.xime.association.AssociationService
 import com.kingzcheung.xime.clipboard.ClipboardManager
 import com.kingzcheung.xime.clipboard.sync.ClipboardSyncBridge
+import com.kingzcheung.xime.plugin.ActivePluginSelection
 import com.kingzcheung.xime.plugin.ExtensionManager
 import com.kingzcheung.xime.plugin.core.api.ToolPlugin
 import com.kingzcheung.xime.plugin.core.api.ToolResult
@@ -112,6 +114,7 @@ import com.kingzcheung.xime.util.FileLogger
 import com.kingzcheung.xime.util.PreeditMergeHelper
 import com.kingzcheung.xime.BuildConfig
 import com.kingzcheung.xime.keyboard.ActionExecutor
+import com.kingzcheung.xime.keyboard.KeyboardPage
 import com.kingzcheung.xime.keyboard.OverlayRoute
 import com.kingzcheung.xime.keyboard.ToolbarButtonItem
 import com.kingzcheung.xime.plugin.core.api.PluginResultItem
@@ -496,6 +499,13 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
                     stopClipboardSync()
                     updateClipboardSync()
                 }
+                SettingsPreferences.KEY_HARDWARE_KEYBOARD_DETECTION_ENABLED -> {
+                    hasHardwareKeyboard = SettingsPreferences.isHardwareKeyboardDetectionEnabled(this@XimeInputMethodService) &&
+                        resources.configuration.keyboard != android.content.res.Configuration.KEYBOARD_NOKEYS
+                    applyCompactMode()
+                    applyWindowBackground()
+                    updateCursorUpdateMonitoring()
+                }
             }
         }
         prefs.registerOnSharedPreferenceChangeListener(sharedPrefsListener)
@@ -819,20 +829,36 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
             val enabled = ExtensionManager.getEnabledClipboardSyncPlugins(this)
             if (enabled.isEmpty()) return
             val preferredId = SettingsPreferences.getClipboardSyncPluginId(this)
-            val selected = enabled.firstOrNull { it.first == preferredId } ?: enabled.first()
+            // 与插件管理页共用同一判定规则（ActivePluginSelection），避免"引擎在跑、页面显示未使用"
+            val resolvedId = ActivePluginSelection.resolve(preferredId, enabled.map { it.first })
+            val selected = enabled.firstOrNull { it.first == resolvedId } ?: enabled.first()
+            // 偏好为空或指向未启用插件时回填实际选中项：让状态收敛，而不是长期并存两种"真相"
+            if (resolvedId != preferredId) {
+                SettingsPreferences.setClipboardSyncPluginId(this, selected.first)
+                Log.d(TAG, "Clipboard sync plugin id resolved: '$preferredId' -> '${selected.first}'")
+            }
             // 能力声明校验：未声明同步协议的插件不启动（manifest.capabilities.clipboard_sync.protocols）
-            val protocols = ExtensionManager.getAllInstalledPlugins()
+            val clipboardSyncCapabilities = ExtensionManager.getAllInstalledPlugins()
                 .firstOrNull { it.id == selected.first }
-                ?.capabilities?.clipboardSync?.protocols
-            if (protocols.isNullOrEmpty()) {
+                ?.capabilities?.clipboardSync
+            if (clipboardSyncCapabilities?.protocols.isNullOrEmpty()) {
                 FileLogger.w(TAG, "Clipboard sync plugin ${selected.first} 未声明同步协议，拒绝启动")
                 return
             }
             val plugin = selected.second
+            // 拉取间隔由所选插件的配置提供（插件 settings.schema 声明 pull_interval_seconds），
+            // 每次拉取节流时动态读取，插件设置修改后即时生效
+            val syncConfigStore = PluginManager.configStoreFactory
+                .create(applicationContext as android.app.Application, selected.first)
             clipboardSyncBridge = ClipboardSyncBridge(
                 clipboardManager,
                 plugin,
-                pluginId = selected.first
+                pluginId = selected.first,
+                // 未声明 attachments 的插件自动降级为仅文本同步（图片不推送、远端图片不落盘）
+                supportsAttachments = clipboardSyncCapabilities.attachments,
+                pullIntervalSeconds = {
+                    syncConfigStore.get(ClipboardSyncBridge.CONFIG_KEY_PULL_INTERVAL_SECONDS)
+                }
             )
             clipboardSyncBridge?.start()
             uiState.value = uiState.value.copy(clipboardSyncEnabled = true)
@@ -865,10 +891,18 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
         // 当前 bridge 使用的插件与偏好选中的插件不一致时，重启切换到偏好插件
         val enabled = ExtensionManager.getEnabledClipboardSyncPlugins(this)
         val preferredId = SettingsPreferences.getClipboardSyncPluginId(this)
-        val shouldUse = (if (preferredId.isNotEmpty()) {
-            enabled.firstOrNull { it.first == preferredId }
-        } else null) ?: enabled.first()
-        if (shouldUse.first != clipboardSyncBridge?.pluginId) {
+        // 与 startClipboardSyncIfEnabled 同一解析规则（含"首个已启用项"回退）
+        val resolvedId = ActivePluginSelection.resolve(preferredId, enabled.map { it.first })
+        val shouldUse = enabled.firstOrNull { it.first == resolvedId } ?: return
+        if (resolvedId != preferredId) SettingsPreferences.setClipboardSyncPluginId(this, resolvedId)
+        // 能力声明也会随插件热更新变化（典型：插件从"仅文本"升级到声明 attachments）：
+        // 能力变了必须重建 bridge，否则会一直沿用旧能力（表现成"图片永远不同步"）
+        val attachments = ExtensionManager.getAllInstalledPlugins()
+            .firstOrNull { it.id == shouldUse.first }
+            ?.capabilities?.clipboardSync?.attachments == true
+        if (shouldUse.first != clipboardSyncBridge?.pluginId ||
+            attachments != clipboardSyncBridge?.supportsAttachments
+        ) {
             stopClipboardSync()
             startClipboardSyncIfEnabled()
         }
@@ -1448,7 +1482,17 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
                             HardwareKeyboardCandidateBar(
                                 inputText = cand.inputText,
                                 preeditText = cand.preeditText,
-                                candidates = cand.candidates,
+                                // 紧凑/浮空候选栏只渲染文本：图片位替换为「图片」标签，
+                                // 长度与顺序不变（点选索引仍与 recentClipboardItemsState 对齐）
+                                candidates = cand.candidates.mapIndexed { i, text ->
+                                    if (cand.isShowingRecentClipboard &&
+                                        recentClipboardItemsState.value.getOrNull(i)?.isImage == true
+                                    ) {
+                                        "图片"
+                                    } else {
+                                        text
+                                    }
+                                },
                                 hasNextPage = cand.hasNextPage,
                                 hasPrevPage = cand.hasPrevPage,
                                 cursorX = state.cursorX,
@@ -1560,6 +1604,18 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
                                     toolPanelUiNodes = state.toolPanelUiNodes,
                                     clipboardSyncEnabled = state.clipboardSyncEnabled,
                                 )
+                            }
+                            // 覆盖页（菜单/剪贴板/表情等）激活时清除内联建议：
+                            // InlineContentView 由独立 surface 支撑，其子 surface 合成在
+                            // 窗口自身内容之上，Compose 覆盖层即使不透明也遮不住，
+                            // 建议会浮在剪贴板/菜单面板上方（表现为候选栏位置内容重叠）。
+                            // 与开始输入时 dismissInlineSuggestions 同语义，均含 surface
+                            // 释放（InlineSuggestionViews.releaseAll）；覆盖页关闭后由
+                            // 宿主 app 重新下发建议。
+                            val isOverlayActive = keyboardViewModel.page
+                                .collectAsState().value is KeyboardPage.Overlay
+                            LaunchedEffect(isOverlayActive) {
+                                if (isOverlayActive) dismissInlineSuggestions()
                             }
                             val callbacks = rememberImeKeyboardCallbacks(this@XimeInputMethodService, floatingMinY, state, effectiveScreenH)
                             keyboardCallbacks = callbacks
@@ -2002,14 +2058,22 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
         info?.let { updateEnterKeyText(it) }
-        hasHardwareKeyboard = resources.configuration.keyboard != android.content.res.Configuration.KEYBOARD_NOKEYS
+        hasHardwareKeyboard = SettingsPreferences.isHardwareKeyboardDetectionEnabled(this) &&
+            resources.configuration.keyboard != android.content.res.Configuration.KEYBOARD_NOKEYS
         applyCompactMode()
         applyWindowBackground()
-        if (hasHardwareKeyboard) {
-            currentInputConnection?.requestCursorUpdates(
+        updateCursorUpdateMonitoring()
+    }
+
+    /** 根据当前硬件键盘状态管理光标位置更新监听。 */
+    private fun updateCursorUpdateMonitoring() {
+        currentInputConnection?.requestCursorUpdates(
+            if (hasHardwareKeyboard) {
                 InputConnection.CURSOR_UPDATE_MONITOR or InputConnection.CURSOR_UPDATE_IMMEDIATE
-            )
-        }
+            } else {
+                0
+            }
+        )
     }
 
     private var anchorCoords = floatArrayOf(0f, 0f, 0f, 0f)
@@ -2056,7 +2120,8 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
     }
 
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
-        hasHardwareKeyboard = newConfig.keyboard != android.content.res.Configuration.KEYBOARD_NOKEYS
+        hasHardwareKeyboard = SettingsPreferences.isHardwareKeyboardDetectionEnabled(this) &&
+            newConfig.keyboard != android.content.res.Configuration.KEYBOARD_NOKEYS
         super.onConfigurationChanged(newConfig)
         if (newConfig.screenWidthDp > newConfig.screenHeightDp) {
             closeToolPanel()
@@ -2064,11 +2129,7 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
         applyCompactMode()
         loadDarkModePreference()
         applyWindowBackground()
-        if (hasHardwareKeyboard) {
-            currentInputConnection?.requestCursorUpdates(
-                InputConnection.CURSOR_UPDATE_MONITOR or InputConnection.CURSOR_UPDATE_IMMEDIATE
-            )
-        }
+        updateCursorUpdateMonitoring()
     }
 
     internal fun applyWindowBackground() {
@@ -2133,7 +2194,8 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
 
     private fun applyCompactMode() {
         val current = uiState.value
-        val isCompact = hasHardwareKeyboard
+        val detectionEnabled = SettingsPreferences.isHardwareKeyboardDetectionEnabled(this)
+        val isCompact = detectionEnabled && hasHardwareKeyboard
         FileLogger.i(
             TAG,
             "applyCompactMode: keyboardCfg=${keyboardConfigName(resources.configuration.keyboard)}, " +

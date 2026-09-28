@@ -1,6 +1,7 @@
 package com.kingzcheung.xime.settings
 
 import android.content.Context
+import com.kingzcheung.xime.clipboard.ClipboardImageStore
 import com.kingzcheung.xime.clipboard.ClipboardManager
 import com.kingzcheung.xime.model.ModelManager
 import com.kingzcheung.xime.settings.SchemaManifestManager.BUILTIN_PACKAGE_ID
@@ -18,8 +19,9 @@ import java.util.Locale
  * - logs         filesDir/logs（保留 FileLogger 当日活跃文件，其句柄仍被持有）
  * - schema_cache rime/build 编译产物 + rime/logs；清除后复位部署标记，
  *                下次启动 ensureDeployment 自动全量重建，词库/自定义配置不受影响
- * - clipboard    Room 数据库文件（clipboard.db*）；清除走 ClipboardManager 的
- *                剪贴板历史清空（保留快捷发送）
+ * - clipboard    Room 数据库文件（clipboard.db*）+ filesDir/clipboard_images 图片文件；
+ *                清除走 ClipboardManager 的剪贴板历史清空（保留快捷发送），
+ *                并回收图片文件与数据库无引用的残留
  * - models       filesDir/models 已下载模型；清除后需重新下载
  * - plugins      filesDir/plugins + plugin_icons；不就地清除（批量卸载会连配置
  *                丢失），由插件管理页逐个卸载，本页只统计并引导跳转
@@ -69,6 +71,10 @@ object StorageStats {
             .filter { it.exists() }
     }
 
+    /** 剪贴板图片目录（files/clipboard_images）。 */
+    fun clipboardImagesDir(context: Context): File =
+        ClipboardImageStore.rootDirOf(context.filesDir)
+
     // ── 统计 ──
 
     /** 递归统计目录大小；目录不存在返回 0。 */
@@ -85,7 +91,10 @@ object StorageStats {
         val buildSize = directorySize(rimeBuildDir(context)) + directorySize(rimeLogsDir(context))
         val pluginsSize = directorySize(pluginsDir(context)) + directorySize(pluginIconsDir(context))
         val marketSize = directorySize(marketDir(context))
-        val clipboardSize = clipboardDbFiles(context).sumOf { it.length() }
+        // 剪贴板类目 = Room 库文件 + 图片文件（files/clipboard_images）；
+        // 不并入的话图片目录会落进 otherSize（不可清理的"其他数据"）
+        val clipboardSize = clipboardDbFiles(context).sumOf { it.length() } +
+            directorySize(clipboardImagesDir(context))
         val logsSize = directorySize(logsDir(context))
         val cacheSize = directorySize(context.cacheDir)
 
@@ -132,7 +141,7 @@ object StorageStats {
             Category(
                 id = ID_CLIPBOARD,
                 title = "剪贴板历史",
-                description = "本地剪贴板记录（不含快捷发送与置顶内容）",
+                description = "本地剪贴板文字与图片记录（不含快捷发送与置顶内容）",
                 sizeBytes = clipboardSize,
                 clearable = true,
             ),
@@ -165,16 +174,17 @@ object StorageStats {
     // ── 清除 ──
 
     /**
-     * 清除指定类目（IO 耗时，须在后台线程调用）。
+     * 清除指定类目（IO 耗时，须在后台线程调用；剪贴板类目会等待引擎清空完成，
+     * 以便调用方紧接着重新统计时能读到清理后的真实占用）。
      * @return 是否有内容被清理（空目录清理也返回 true，UI 不区分）
      */
-    fun clearCategory(context: Context, id: String): Boolean {
+    suspend fun clearCategory(context: Context, id: String): Boolean {
         return when (id) {
             ID_MODELS -> clearModels(context)
             ID_SCHEMA_CACHE -> clearSchemaCache(context)
             ID_CLIPBOARD -> {
-                // 走引擎清空：保留快捷发送与置顶，回调通知各处刷新
-                ClipboardManager.getInstance(context).clearClipboard()
+                // 走引擎清空：保留快捷发送与置顶，回收图片文件与残留，并等待完成
+                ClipboardManager.getInstance(context).clearClipboardAndWait()
                 true
             }
             ID_LOGS -> clearLogs(context)

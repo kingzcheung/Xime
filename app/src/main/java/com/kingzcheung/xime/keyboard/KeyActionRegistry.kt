@@ -126,6 +126,7 @@ object KeyActionRegistry {
         register("delete", ActionDomain.CROSS, GestureAction.DELETE) { c, _ -> c.service.dispatchKey("delete") }
 
         register("enter", ActionDomain.SERVICE, GestureAction.ENTER) { c, _ -> c.service.dispatchKey("enter") }
+        register("newline", ActionDomain.SERVICE, GestureAction.NEWLINE) { c, _ -> c.service.dispatchKey("newline") }
         register("space", ActionDomain.SERVICE, GestureAction.SPACE) { c, _ -> c.service.dispatchKey("space") }
         register("repeat_space", ActionDomain.SERVICE, GestureAction.REPEAT_SPACE) { c, v ->
             val count = v.toIntOrNull()?.coerceIn(1, 100) ?: 5

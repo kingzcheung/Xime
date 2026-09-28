@@ -11,7 +11,7 @@
   "description": "对接 ximed HTTP 接口的双向剪贴板同步（文本），需要安装 ximed 服务器端和 ximed 客户端(https://github.com/kingzcheung/ximed)",
 
   // 插件版本（字符串）
-  "version": "1.0.0",
+  "version": "1.0.1",
 
   // 插件分类：clipboard_sync 剪贴板同步（单选激活）
   "type": "clipboard_sync",

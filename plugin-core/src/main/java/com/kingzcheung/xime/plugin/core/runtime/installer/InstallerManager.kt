@@ -118,7 +118,9 @@ internal data class ToolCapabilitiesConfig(
 
 @Serializable
 internal data class ClipboardSyncCapabilitiesConfig(
-    val protocols: List<String> = emptyList()
+    val protocols: List<String> = emptyList(),
+    /** 附件（图片 blob）传输支持；旧 manifest 无此键 → false（宿主按文本-only 插件处理）。 */
+    val attachments: Boolean = false
 )
 
 @Serializable
@@ -156,7 +158,8 @@ private fun CapabilitiesConfig.toModel(): com.kingzcheung.xime.plugin.core.model
         },
         clipboardSync = clipboardSync?.let {
             com.kingzcheung.xime.plugin.core.model.PluginCapabilities.ClipboardSyncCapabilities(
-                protocols = it.protocols.filter { p -> p.isNotBlank() }
+                protocols = it.protocols.filter { p -> p.isNotBlank() },
+                attachments = it.attachments
             )
         },
         backup = backup?.let {

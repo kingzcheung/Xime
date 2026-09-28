@@ -108,6 +108,9 @@ enum class GestureAction(val value: String) {
     /** 回车键语义（组合态提交编码 / 空闲态编辑器动作）。 */
     ENTER("enter"),
 
+    /** 纯换行语义：无视编辑器 imeOptions，固定插入一个换行（组合态先提交编码）。 */
+    NEWLINE("newline"),
+
     /** 空格键语义（组合态选首候选 / 空闲态上屏空格）。 */
     SPACE("space"),
 

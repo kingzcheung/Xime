@@ -10,7 +10,9 @@ import android.provider.MediaStore
 import android.content.ContentValues
 import android.os.Environment
 import android.net.Uri
+import android.widget.Toast
 import androidx.core.content.FileProvider
+import com.kingzcheung.xime.clipboard.ClipboardItem
 import java.io.File
 import java.io.FileInputStream
 import kotlinx.coroutines.Dispatchers
@@ -130,6 +132,40 @@ internal class ImeTextCommit(private val service: XimeInputMethodService) {
         // 粘贴不计打字统计（不投 text_committed），联想照常
         service.commitPastedText(text)
         service.clipboardManager.copyToSystemClipboard(text)
+    }
+
+    /**
+     * 剪贴板**图片**条目点选。
+     *
+     * 两条路径（与 Emoji 图片发送一致，复用 [commitImage] 的 MIME 探测）：
+     * 1. 宿主输入框声明支持图片 MIME → `commitContent` 直插（如部分笔记/邮件应用）；
+     * 2. 否则（微信/Telegram 等）→ 写入系统剪贴板，提示用户长按输入框粘贴发送。
+     *
+     * 图片条目没有文本上屏，但同样标记 consumed（候选栏/列表不再提示"新内容"）。
+     */
+    internal fun selectClipboardImage(item: ClipboardItem) {
+        service.clipboardManager.markConsumedById(item.id)
+        val file = service.clipboardManager.imageFileOf(item)
+        if (file == null) {
+            FileLogger.w(XimeInputMethodService.TAG, "Clipboard image file missing: ${item.imagePath}")
+            Toast.makeText(service, "图片已不在本地，无法发送", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val mimeType = item.mimeType.ifEmpty { "image/jpeg" }
+        if (commitImage(file.absolutePath, mimeType)) return
+
+        val copied = service.clipboardManager.copyImageToSystemClipboard(
+            imagePath = file.absolutePath,
+            label = "xime_clipboard_image",
+            // 直接共享 files/clipboard_images 原文件（配合淘汰保护集），
+            // 避免再拷一份到 cache 造成重复占用
+            shareCacheCopy = false,
+        )
+        Toast.makeText(
+            service,
+            if (copied) "已复制图片，长按输入框粘贴" else "复制图片失败",
+            Toast.LENGTH_SHORT,
+        ).show()
     }
 
     internal fun commitClipboardText(text: String) {

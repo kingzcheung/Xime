@@ -271,6 +271,10 @@ private fun categoryIcon(id: String): ImageVector = when (id) {
     else -> Icons.TwoTone.DataObject
 }
 
+/** 剪贴板类目清理确认文案（清理剪贴板历史的唯一入口：关于 → 存储空间）。 */
+internal const val CLIPBOARD_CLEAR_CONFIRM_TEXT =
+    "将清空本地剪贴板历史记录与已复制的图片（保留快捷发送与置顶内容），且不可恢复。确定继续吗？"
+
 private fun clearConfirmText(id: String): String = when (id) {
     StorageStats.ID_MODELS ->
         "将删除所有已下载的离线模型（联想 / 手写 / 语音识别），对应功能在重新下载模型前不可用。确定继续吗？"
@@ -278,8 +282,7 @@ private fun clearConfirmText(id: String): String = when (id) {
         "将删除输入方案的编译缓存与编译日志，不会影响词库和自定义配置；下次启动输入法时会自动重新编译。确定继续吗？"
     StorageStats.ID_MARKET_PACKAGES ->
         "将删除方案市场中已下载的安装包（内置方案除外）。已安装的方案不受影响，但重新安装时需要重新下载。确定继续吗？"
-    StorageStats.ID_CLIPBOARD ->
-        "将清空本地剪贴板历史记录（保留快捷发送与置顶内容），且不可恢复。确定继续吗？"
+    StorageStats.ID_CLIPBOARD -> CLIPBOARD_CLEAR_CONFIRM_TEXT
     StorageStats.ID_LOGS ->
         "将删除历史运行日志（保留当日日志）。确定继续吗？"
     StorageStats.ID_CACHE ->

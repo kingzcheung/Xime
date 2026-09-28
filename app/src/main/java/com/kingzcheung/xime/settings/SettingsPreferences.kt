@@ -2,6 +2,7 @@ package com.kingzcheung.xime.settings
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.kingzcheung.xime.clipboard.ClipboardImageStore
 import com.kingzcheung.xime.plugin.core.runtime.PluginManager
 
 object SettingsPreferences {
@@ -54,6 +55,7 @@ object SettingsPreferences {
     const val KEY_SWIPE_DOWN_HINTS_ENABLED = "swipe_down_hints_enabled"
     const val KEY_SHOW_PRESS_BUBBLE = "show_press_bubble"
     const val KEY_LANDSCAPE_SPLIT_KEYBOARD_ENABLED = "landscape_split_keyboard_enabled"
+    const val KEY_HARDWARE_KEYBOARD_DETECTION_ENABLED = "hardware_keyboard_detection_enabled"
 
     private const val KEY_RIME_INSTALLATION_ID = "rime_installation_id"
 
@@ -78,6 +80,13 @@ object SettingsPreferences {
 
     fun setAutoNumberKeyboardEnabled(context: Context, enabled: Boolean) {
         getPrefs(context).edit().putBoolean(KEY_AUTO_NUMBER_KEYBOARD, enabled).apply()
+    }
+
+    fun isHardwareKeyboardDetectionEnabled(context: Context): Boolean =
+        getPrefs(context).getBoolean(KEY_HARDWARE_KEYBOARD_DETECTION_ENABLED, true)
+
+    fun setHardwareKeyboardDetectionEnabled(context: Context, enabled: Boolean) {
+        getPrefs(context).edit().putBoolean(KEY_HARDWARE_KEYBOARD_DETECTION_ENABLED, enabled).apply()
     }
     
     private const val KEY_LAYOUT_PREFIX = "layout_pref_"
@@ -757,6 +766,40 @@ object SettingsPreferences {
 
     fun setClipboardSyncPluginId(context: Context, pluginId: String) {
         getPrefs(context).edit().putString(KEY_CLIPBOARD_SYNC_PLUGIN_ID, pluginId).apply()
+    }
+
+    // ── 剪贴板图片（Phase 2：采集开关 + 单张上限可配） ──────────────
+
+    /** 是否采集复制到剪贴板的图片（默认开，见 docs/clipboard-image-plan.md 决策 D1）。 */
+    const val KEY_CLIPBOARD_IMAGE_CAPTURE = "clipboard_image_capture"
+
+    private const val KEY_CLIPBOARD_IMAGE_MAX_MB = "clipboard_image_max_mb"
+
+    /** 单张上限可选项区间（设置页滑块与读取校验共用，避免脏值导致滑块越界）。 */
+    val CLIPBOARD_IMAGE_MAX_MB_RANGE = 1..20
+
+    fun isClipboardImageCaptureEnabled(context: Context): Boolean {
+        return getPrefs(context).getBoolean(KEY_CLIPBOARD_IMAGE_CAPTURE, true)
+    }
+
+    fun setClipboardImageCaptureEnabled(context: Context, enabled: Boolean) {
+        getPrefs(context).edit().putBoolean(KEY_CLIPBOARD_IMAGE_CAPTURE, enabled).apply()
+    }
+
+    /**
+     * 单张图片上限（MB），默认 [ClipboardImageStore.MAX_IMAGE_BYTES]。
+     * 其余限制（最长边/保留数量/总容量）为内置常量，不提供设置项。
+     */
+    fun getClipboardImageMaxMb(context: Context): Int {
+        val default = (ClipboardImageStore.MAX_IMAGE_BYTES / 1024 / 1024).toInt()
+        return getPrefs(context).getInt(KEY_CLIPBOARD_IMAGE_MAX_MB, default)
+            .coerceIn(CLIPBOARD_IMAGE_MAX_MB_RANGE)
+    }
+
+    fun setClipboardImageMaxMb(context: Context, mb: Int) {
+        getPrefs(context).edit()
+            .putInt(KEY_CLIPBOARD_IMAGE_MAX_MB, mb.coerceIn(CLIPBOARD_IMAGE_MAX_MB_RANGE))
+            .apply()
     }
 
     const val KEY_BACKUP_PLUGIN_ID = "backup_plugin_id"

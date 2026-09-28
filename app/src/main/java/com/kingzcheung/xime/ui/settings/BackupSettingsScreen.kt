@@ -2,18 +2,21 @@ package com.kingzcheung.xime.ui.settings
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.twotone.Backup
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.twotone.CloudUpload
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -38,10 +41,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.kingzcheung.xime.plugin.ActivePluginSelection
 import com.kingzcheung.xime.plugin.ExtensionManager
+import com.kingzcheung.xime.plugin.core.api.BackupPlugin
 import com.kingzcheung.xime.plugin.core.model.PluginCategory
+import com.kingzcheung.xime.plugin.core.model.PluginInfo
 import com.kingzcheung.xime.settings.BackupManager
 import com.kingzcheung.xime.settings.ExportMode
 import com.kingzcheung.xime.settings.SettingsPreferences
@@ -75,11 +82,13 @@ fun BackupSettingsContent(
     val installedPlugins = remember { ExtensionManager.getAllInstalledPlugins() }
     val backupPlugins = remember { installedPlugins.filter { it.category == PluginCategory.BACKUP } }
     val syncPlugins = remember { ExtensionManager.getEnabledBackupPlugins(context) }
+    // 与插件管理页/引擎同一判定规则（ActivePluginSelection）：偏好为空或指向未启用插件时回退首个已启用项
     var selectedPluginId by remember {
         mutableStateOf(
-            SettingsPreferences.getBackupPluginId(context).ifEmpty {
-                syncPlugins.firstOrNull()?.first ?: ""
-            }
+            ActivePluginSelection.resolve(
+                SettingsPreferences.getBackupPluginId(context),
+                syncPlugins.map { it.first }
+            )
         )
     }
     var activePlugin by remember {
@@ -94,6 +103,8 @@ fun BackupSettingsContent(
     val busy = busyOp != null
     var message by remember { mutableStateOf<String?>(null) }
     var remoteList by remember { mutableStateOf<List<com.kingzcheung.xime.plugin.core.api.RemoteBackupEntry>?>(null) }
+    // 切换备份服务走单选弹窗（与剪贴板同步/语音转文本同构：插件多时页面长度恒定）
+    var showServicePicker by remember { mutableStateOf(false) }
 
     // 词库同步（词典快照为主链路，配置备份为附带；语义分工见各区块说明）
     var lastSyncAt by remember {
@@ -159,13 +170,13 @@ fun BackupSettingsContent(
             SettingsSection(
                 title = "备份服务",
                 content = {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        if (backupPlugins.isEmpty()) {
+                    if (backupPlugins.isEmpty()) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
                             Text(
                                 text = "未安装备份插件，请先在扩展商店安装后再配置。",
                                 style = MaterialTheme.typography.bodyMedium,
@@ -177,45 +188,16 @@ fun BackupSettingsContent(
                             ) {
                                 Text("前往扩展商店")
                             }
-                        } else {
-                            backupPlugins.forEach { plugin ->
-                                val isActive = plugin.id == selectedPluginId
-                                val protocols = plugin.capabilities?.backup?.protocols.orEmpty()
-                                SettingsToggleItem(
-                                    icon = Icons.TwoTone.Backup,
-                                    title = plugin.name,
-                                    subtitle = buildString {
-                                        append(plugin.description)
-                                        if (protocols.isNotEmpty()) {
-                                            append("\n备份协议: ")
-                                            append(protocols.joinToString("、"))
-                                        }
-                                    },
-                                    checked = isActive,
-                                    onCheckedChange = { checked ->
-                                        if (checked && !isActive) {
-                                            selectedPluginId = plugin.id
-                                            SettingsPreferences.setBackupPluginId(context, plugin.id)
-                                            remoteList = null
-                                            scope.launch(Dispatchers.IO) {
-                                                // 单选激活：同一时间只启用 1 个备份插件
-                                                backupPlugins
-                                                    .filter { it.id != plugin.id }
-                                                    .forEach {
-                                                        SettingsPreferences.setPluginEnabled(context, it.id, false)
-                                                        PluginManager.unloadPlugin(it.id)
-                                                    }
-                                                SettingsPreferences.setPluginEnabled(context, plugin.id, true)
-                                                PluginManager.launchPlugin(plugin.id)
-                                                val instance = ExtensionManager.getEnabledBackupPlugins(context)
-                                                    .firstOrNull { it.first == plugin.id }
-                                                activePlugin = instance
-                                            }
-                                        }
-                                    }
-                                )
-                            }
                         }
+                    } else {
+                        // 入口始终可见（与剪贴板同步/语音转文本一致）：只装 1 个插件时也能点开确认候选与协议
+                        // 行自带 16dp 内边距，这里不再套一层 padding 的 Column，避免双重留白
+                        CurrentBackupServiceItem(
+                            pluginInfo = installedPlugins.find { it.id == activePlugin?.first },
+                            pluginId = activePlugin?.first,
+                            plugin = activePlugin?.second,
+                            onClick = { showServicePicker = true }
+                        )
                     }
                 }
             )
@@ -661,5 +643,116 @@ fun BackupSettingsContent(
                 )
             }
         }
+    }
+
+    if (showServicePicker) {
+        // 切换备份服务：单选弹窗（点行即切换并关闭）
+        SettingsSingleChoiceDialog(
+            title = "选择备份服务",
+            options = backupPlugins.map { plugin ->
+                val protocols = plugin.capabilities?.backup?.protocols.orEmpty()
+                SettingsChoiceOption(
+                    id = plugin.id,
+                    title = plugin.name,
+                    subtitle = buildString {
+                        append(plugin.description)
+                        if (protocols.isNotEmpty()) {
+                            append("\n备份协议: ")
+                            append(protocols.joinToString("、"))
+                        }
+                    }
+                )
+            },
+            selectedId = selectedPluginId,
+            onSelect = { pickedId ->
+                showServicePicker = false
+                if (pickedId != selectedPluginId) {
+                    selectedPluginId = pickedId
+                    SettingsPreferences.setBackupPluginId(context, pickedId)
+                    remoteList = null
+                    scope.launch(Dispatchers.IO) {
+                        // 单选激活：同一时间只启用 1 个备份插件
+                        backupPlugins
+                            .filter { it.id != pickedId }
+                            .forEach {
+                                SettingsPreferences.setPluginEnabled(context, it.id, false)
+                                PluginManager.unloadPlugin(it.id)
+                            }
+                        SettingsPreferences.setPluginEnabled(context, pickedId, true)
+                        PluginManager.launchPlugin(pickedId)
+                        // 重新获取已启用实例，驱动配置表单与远端备份列表切换到新插件
+                        activePlugin = ExtensionManager.getEnabledBackupPlugins(context)
+                            .firstOrNull { it.first == pickedId }
+                    }
+                }
+            },
+            onDismiss = { showServicePicker = false }
+        )
+    }
+}
+
+/**
+ * 当前生效的备份服务（一行）。
+ *
+ * 切换入口收进对话框（[SettingsSingleChoiceDialog] 的等价内联实现）：插件多时页面长度恒定，
+ * 这里只回答"现在用的是谁、备份协议是什么"。整行**始终可点**——只装一个插件时，
+ * 这个入口是页面上唯一能确认候选与协议的地方，藏掉它会让"当前生效的是谁"无处可查。
+ */
+@Composable
+private fun CurrentBackupServiceItem(
+    pluginInfo: PluginInfo?,
+    pluginId: String?,
+    plugin: BackupPlugin?,
+    onClick: () -> Unit,
+) {
+    val context = LocalContext.current
+    val icon = remember(pluginId, plugin) {
+        if (pluginId == null || plugin == null) null
+        else ExtensionManager.extractPluginIcon(context, pluginId, plugin, pluginInfo)
+    }
+    val protocols = pluginInfo?.capabilities?.backup?.protocols.orEmpty()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        PluginIconView(
+            icon = icon,
+            category = PluginCategory.BACKUP
+        )
+        Spacer(modifier = Modifier.width(16.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = pluginInfo?.name ?: pluginId ?: "未选择备份服务",
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium
+            )
+            if (!pluginInfo?.description.isNullOrBlank()) {
+                Text(
+                    text = pluginInfo.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (protocols.isNotEmpty()) {
+                Text(
+                    text = "备份协议: " + protocols.joinToString("、"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+        Text(
+            text = if (pluginId == null) "选择" else "切换",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Icon(
+            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }

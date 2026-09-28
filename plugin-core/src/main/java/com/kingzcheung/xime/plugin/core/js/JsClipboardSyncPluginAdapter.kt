@@ -14,7 +14,9 @@ import kotlinx.coroutines.withContext
  * 协议逻辑（WebDAV / S3 / ximed HTTP）全部由插件 JS 用 `host.http` + `host.crypto`
  * 承载，本类只做接口桥接：
  * - push(profile)      → JS `clipboardSync.push(profile)`，profile 字段 camelCase
- * - pull()             → JS `clipboardSync.pull()`，返回 profile 对象（null → 无变更）
+ *                        （`data` 附件字节经 JS 桥转 `Uint8Array`）
+ * - pull()             → JS `clipboardSync.pull()`，返回 profile 对象（null → 无变更；
+ *                        图片 profile 的 `text` 为空串但 `hasData=true`，判空须两者兼顾）
  * - testConnection()   → JS `clipboardSync.test()`，返回错误消息（null/空 → 成功）
  */
 class JsClipboardSyncPluginAdapter(
@@ -32,6 +34,7 @@ class JsClipboardSyncPluginAdapter(
                     "text" to profile.text,
                     "hasData" to profile.hasData,
                     "dataName" to profile.dataName,
+                    "data" to profile.data,
                     "size" to profile.size,
                     "source" to profile.source
                 )
@@ -47,15 +50,25 @@ class JsClipboardSyncPluginAdapter(
         try {
             val result = runtime.callAsync(JsPluginContract.PATH_CLIPBOARD_PULL)
             val map = JsScriptRuntime.jsToKotlin(result) as? Map<*, *> ?: return@withContext null
-            val text = map["text"]?.toString()?.takeIf { it.isNotEmpty() } ?: return@withContext null
+            val text = map["text"]?.toString() ?: ""
+            val hasData = (map["hasData"] as? Boolean) ?: false
+            // 判空必须同时看 hasData：图片 profile 的 text 是空串（决策 D12），
+            // 只按 "text 非空" 判空会让纯图片条目永远被当作"无变更"。
+            if (text.isEmpty() && !hasData) return@withContext null
+            val data = map["data"] as? ByteArray
             val hash = map["hash"]?.toString()?.takeIf { it.isNotEmpty() }
-                ?: ClipboardProfile.sha256Hex(text.toByteArray(Charsets.UTF_8))
+                ?: if (data != null) {
+                    ClipboardProfile.sha256Hex(data)
+                } else {
+                    ClipboardProfile.sha256Hex(text.toByteArray(Charsets.UTF_8))
+                }
             ClipboardProfile(
                 type = map["type"]?.toString() ?: "text",
                 hash = hash,
                 text = text,
-                hasData = (map["hasData"] as? Boolean) ?: false,
+                hasData = hasData,
                 dataName = map["dataName"]?.toString(),
+                data = data,
                 size = (map["size"] as? Number)?.toLong() ?: 0,
                 source = map["source"]?.toString()
             )
