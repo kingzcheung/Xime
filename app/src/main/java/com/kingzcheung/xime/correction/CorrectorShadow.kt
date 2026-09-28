@@ -22,8 +22,10 @@ object CorrectorShadow {
     private const val ALPHA = "abcdefghijklmnopqrstuvwxyz"
     private const val ASSET = "corrector/corrector_wubi.bin"
     private const val TOPK = 3
-    /** 解码 margin：(top_k − 按下键概率) 低于此值不认为是按错。 */
-    private const val MARGIN = 0.5f
+    /** 解码 margin：(候选概率 − 按下键概率) 低于此值不认为是按错。 */
+    private const val MARGIN = 0.4f
+    /** 码表"非法"分（与 WubiCodeTable 一致）：修正码高于此值即可用。 */
+    private const val INVALID = -30.0f
     /** 单个修正编码最多取几个 Rime 候选。 */
     private const val MAX_CORRECTIONS = 2
     /** 启用纠错的方案（五笔主码输入；拼音仅作反查，不影响主码判定）。 */
@@ -120,7 +122,9 @@ object CorrectorShadow {
         val base = (W - 1) * CorrectorNative.VOCAB
         val order = (0 until CorrectorNative.VOCAB).sortedByDescending { logits[base + it] }
 
-        // 解码判定：在 top-k 里选"改成后码更合法/更高频"且 margin 足够的候选
+        // 解码判定：按模型概率从高到低，取第一个 margin 足够、且修正码"可用"
+        // （精确命中或合法前缀，而非非法码）的候选。码表只做合法性否决，不再要求
+        // "比原码更优"——打字途中原码/修正码常同为合法前缀，那样会挡掉绝大多数真错。
         val pressedCode = pressedBuf.joinToString("") { ALPHA[it].toString() }
         val sIn = WubiCodeTable.score(pressedCode)
         val pPressed = logits[base + pressedIdx]
@@ -129,9 +133,10 @@ object CorrectorShadow {
         for (c in order.take(TOPK)) {
             if (logits[base + c] - pPressed < MARGIN) continue
             val s = WubiCodeTable.score(pressedCode.dropLast(1) + ALPHA[c])
-            if (s > sIn && s > sOut) {
+            if (s > INVALID) {
                 sOut = s
                 dec = c
+                break
             }
         }
 

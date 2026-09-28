@@ -81,4 +81,7 @@ object WubiCodeTable {
         if (codes[i].startsWith(code)) return PREFIX
         return INVALID
     }
+
+    /** 该编码是否"可用"：精确命中某码，或为某合法码的前缀（非非法）。 */
+    fun isLegal(code: String): Boolean = score(code) > INVALID
 }
