@@ -37,7 +37,9 @@ if (keystorePropertiesFile.exists()) {
 
 android {
     namespace = "com.kingzcheung.xime"
-    compileSdk = 36
+    compileSdk = 37
+    // 平台按小版本安装（SDK 里是 platforms;android-37.2），不写 minor 时 AGP 会去找 android-37.0
+    compileSdkMinor = 2
 
     // JVM 单测中未 mock 的 Android 框架方法（如 android.util.Log）返回默认值而非抛异常，
     // 使服务层状态机（如语音收尾流程）可直接实例化测试

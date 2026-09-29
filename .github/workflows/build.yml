@@ -35,9 +35,9 @@ jobs:
         with:
           packages: platform-tools
         
-      - name: Install NDK
+      - name: Install NDK and SDK platform
         run: |
-          sdkmanager "ndk;29.0.14206865"
+          sdkmanager "ndk;29.0.14206865" "platforms;android-37.2"
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865" >> $GITHUB_ENV
           echo "ANDROID_NDK=$ANDROID_HOME/ndk/29.0.14206865" >> $GITHUB_ENV
         

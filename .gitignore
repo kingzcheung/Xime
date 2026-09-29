@@ -51,7 +51,7 @@ plugin-api/build
 # Plugin APKs (development only, not packaged in main app)
 app/src/main/assets/plugins/*.apk
 app/src/main/assets/plugins/*.xipk
-
+/.zcodeignore
 /.skills
 fix_encoding.py
 perf.data

@@ -7,7 +7,9 @@ plugins {
 
 android {
     namespace = "com.kingzcheung.xime.plugin.core"
-    compileSdk = 36
+    compileSdk = 37
+    // 平台按小版本安装（SDK 里是 platforms;android-37.2），不写 minor 时 AGP 会去找 android-37.0
+    compileSdkMinor = 2
 
     defaultConfig {
         minSdk = 28
