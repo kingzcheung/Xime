@@ -40,6 +40,8 @@ class JsTencentAsrPluginTest {
     private class MockWsHostApi : WsHostApi {
         val sentBinaries = mutableListOf<ByteArray>()
         val sentTexts = mutableListOf<String>()
+        /** 音频与文本的统一发送顺序（跨类型断言用）。 */
+        val sentOrder = mutableListOf<String>()
         var connectedUrl: String? = null
         var hostListener: WsHostListener? = null
         var closed = false
@@ -49,8 +51,16 @@ class JsTencentAsrPluginTest {
             hostListener = listener
             return true
         }
-        override fun sendText(message: String): Boolean { sentTexts.add(message); return true }
-        override fun sendBinary(data: ByteArray): Boolean { sentBinaries.add(data); return true }
+        override fun sendText(message: String): Boolean {
+            sentTexts.add(message)
+            sentOrder.add(if (message.contains("\"end\"")) "end" else "text")
+            return true
+        }
+        override fun sendBinary(data: ByteArray): Boolean {
+            sentBinaries.add(data)
+            sentOrder.add("audio")
+            return true
+        }
         override fun close() { closed = true }
         override fun getState(): Int = 2
         override fun lastError(): String? = null
@@ -233,6 +243,9 @@ class JsTencentAsrPluginTest {
             // stop → 发送 {"type":"end"} 结束通知
             mock.closed = false
             assertTrue(runtime.callAsync("speech.start") == true)
+            // 新会话先完成握手（{"code":0}）才允许发结束通知：
+            // 握手前 stop 会等到握手后补发缓存音频再发 end（见下一个用例）
+            mock.hostListener?.onMessage("""{"code":0,"message":"success","voice_id":"abc"}""")
             runtime.callAsync("speech.stop")
             awaitUntil { mock.sentTexts.isNotEmpty() }
             assertEquals("stop 应发送结束通知", 1, mock.sentTexts.size)
@@ -271,6 +284,38 @@ class JsTencentAsrPluginTest {
             runtime.callAsync("speech.feed", byteArrayOf(9, 9))
             awaitUntil { mock.sentBinaries.size == 0 }
             assertEquals("断开后音频不应外发", 0, mock.sentBinaries.size)
+        } finally {
+            runtime.close()
+        }
+    }
+
+    /**
+     * 握手（{"code":0}）之前 stop：结束通知不得先于缓冲音频发出。
+     * 回归：曾经直接发 end，握手后补发的音频反而排在 end 后面（音频被服务端丢弃）。
+     */
+    @Test
+    fun `stop before handshake keeps buffered audio ahead of end`() {
+        val mock = MockWsHostApi()
+        val store = InMemoryConfigStore()
+        store.set("appId", "1234567890")
+        store.set("secretId", "AKIDtest0000")
+        store.set("secretKey", "test-secret")
+        val runtime = newRuntime(store, mock)
+        try {
+            assertTrue(runtime.load())
+            assertTrue("start 应成功", runtime.callAsync("speech.start") == true)
+
+            // 握手前的音频 + 立即 stop
+            runtime.callAsync("speech.feed", byteArrayOf(1, 2, 3))
+            runtime.callAsync("speech.stop")
+            assertEquals("握手完成前不应发结束通知", 0, mock.sentTexts.size)
+            assertEquals("握手完成前不应发音频", 0, mock.sentBinaries.size)
+
+            // 握手到达：先补发音频，再发 end
+            mock.hostListener?.onMessage("""{"code":0,"message":"success","voice_id":"abc"}""")
+            awaitUntil { mock.sentOrder.size >= 2 }
+            assertEquals("顺序应为 音频 → end", listOf("audio", "end"), mock.sentOrder)
+            assertTrue("补发的应是缓冲音频", byteArrayOf(1, 2, 3).contentEquals(mock.sentBinaries[0]))
         } finally {
             runtime.close()
         }

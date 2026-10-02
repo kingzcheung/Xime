@@ -148,8 +148,8 @@ data class KeyboardColorsConfig(
 /**
  * 解析一个键的手势绑定表（`keyboard.<section>.keys.<keyId>`）。
  *
- * 槽位：tap / double_tap / long_press / swipe_up / swipe_down / swipe_left / swipe_right；
- * 另有 `when_composing`（组合态覆盖）与 `sticky`（键级粘滞）。
+ * 槽位：tap / double_tap / long_press / swipe_up / swipe_down / swipe_left / swipe_right，
+ * 另有键级 `width`（列宽权重）。
  *
  * @param presets `keyboard.actions` 定义的可复用动作预设
  */
@@ -164,8 +164,6 @@ internal fun parseKeyBinding(
     var swipeDown: KeyAction? = null
     var swipeLeft: KeyAction? = null
     var swipeRight: KeyAction? = null
-    var composing: KeyBinding? = null
-    var sticky = false
     var width: Float? = null
     for ((kNode, vNode) in map.entries) {
         val name = (kNode as? com.charleskorn.kaml.YamlScalar)?.content ?: continue
@@ -177,14 +175,10 @@ internal fun parseKeyBinding(
             "swipe_down" -> swipeDown = parseKeyAction(vNode, GestureAction.COMMIT, presets)
             "swipe_left" -> swipeLeft = parseKeyAction(vNode, GestureAction.COMMIT, presets)
             "swipe_right" -> swipeRight = parseKeyAction(vNode, GestureAction.COMMIT, presets)
-            "when_composing" -> if (vNode is com.charleskorn.kaml.YamlMap) {
-                composing = parseKeyBinding(vNode, presets)
-            }
-            "sticky" -> sticky = (vNode as? com.charleskorn.kaml.YamlScalar)?.content?.toBooleanStrictOrNull() ?: false
             "width" -> width = (vNode as? com.charleskorn.kaml.YamlScalar)?.content?.toFloatOrNull()
         }
     }
-    return KeyBinding(tap, doubleTap, longPress, swipeUp, swipeDown, swipeLeft, swipeRight, composing, sticky, width)
+    return KeyBinding(tap, doubleTap, longPress, swipeUp, swipeDown, swipeLeft, swipeRight, width)
 }
 
 /**
@@ -193,6 +187,9 @@ internal fun parseKeyBinding(
  * - [display] 缺省为 `bubble`（长按弹出气泡滑动选择）；设为 `key` 则显示在键面，不弹气泡；
  * - [values] 为候选动作列表（单动作也写成单元素列表）。
  */
+/** 长按气泡最多展示的候选数（气泡按此宽度布局）。 */
+private const val MAX_LONG_PRESS_VALUES = 10
+
 private fun parseLongPress(
     node: com.charleskorn.kaml.YamlNode,
     presets: Map<String, KeyAction>,
@@ -204,14 +201,28 @@ private fun parseLongPress(
         return null
     }
     val valuesNode = node.opt<YamlList>("values") ?: return null
-    val display = node.opt<YamlScalar>("display")?.content
+    var display = node.opt<YamlScalar>("display")?.content
         ?.let { DisplayMode.fromValue(it) }
         ?: DisplayMode.BUBBLE
-    val values = valuesNode.items.map { parseKeyAction(it, GestureAction.COMMIT, presets) }.take(10)
+    if (display != DisplayMode.BUBBLE) {
+        // 长按的键面绘制尚未实现（v1 曾有「键面显示前 2 个候选」）：一律按气泡处理，
+        // 否则 display: key/both 会让长按候选既不画键面、也不弹气泡 —— 完全不可达。
+        Log.w("KeysConfigHelper", "long_press 的 display 只支持 bubble：键面绘制未实现，已按 bubble 处理")
+        display = DisplayMode.BUBBLE
+    }
+    if (valuesNode.items.size > MAX_LONG_PRESS_VALUES) {
+        Log.w(
+            "KeysConfigHelper",
+            "long_press.values 最多 $MAX_LONG_PRESS_VALUES 项，已忽略多余 ${valuesNode.items.size - MAX_LONG_PRESS_VALUES} 项"
+        )
+    }
+    val values = valuesNode.items.map { parseKeyAction(it, GestureAction.COMMIT, presets) }.take(MAX_LONG_PRESS_VALUES)
+    if (values.any { it.label.ifEmpty { it.value }.isEmpty() }) {
+        Log.w("KeysConfigHelper", "long_press 存在既无 label 也无 value 的项：该项无法在气泡中展示，也不会生效")
+    }
     return LongPressAction(
         display = display,
         values = values,
-        repeat = values.firstOrNull()?.repeat ?: false,
     )
 }
 
@@ -248,20 +259,18 @@ private fun parseKeyAction(
             return preset
         }
         var label = ""
-        var labels: List<String> = emptyList()
+        var iconName = ""
         var action: GestureAction? = defaultAction
         var value = ""
         var display = "key"
         var bubble = true
-        var repeat = false
-        var sticky = false
         for ((k, v) in node.entries) {
             val key = (k as? com.charleskorn.kaml.YamlScalar)?.content ?: continue
             when (key) {
                 "label" -> {
                     if (v is YamlList) {
-                        labels = v.items.mapNotNull { (it as? YamlScalar)?.content }
-                        label = labels.joinToString("\n")
+                        // 数组 label 按多行显示：join 后就是显示文本
+                        label = v.items.mapNotNull { (it as? YamlScalar)?.content }.joinToString("\n")
                     } else {
                         label = (v as? YamlScalar)?.content ?: continue
                     }
@@ -280,22 +289,21 @@ private fun parseKeyAction(
                 "value" -> (v as? YamlScalar)?.content?.let { value = it }
                 "display" -> (v as? YamlScalar)?.content?.let { display = it }
                 "bubble" -> bubble = (v as? YamlScalar)?.content?.toBooleanStrictOrNull() ?: true
-                "repeat" -> repeat = (v as? YamlScalar)?.content?.toBooleanStrictOrNull() ?: false
-                "sticky" -> sticky = (v as? YamlScalar)?.content?.toBooleanStrictOrNull() ?: false
+                // 图标名：`icon: mic` 与历史写法 `label: "@mic"` 等价
+                "icon" -> (v as? YamlScalar)?.content?.takeIf { it.isNotBlank() }?.let { iconName = it.removePrefix("@") }
+                else -> Log.w("KeysConfigHelper", "手势配置含未知字段 \"$key\"（多为拼写错误），已忽略")
             }
         }
-        val icon = if (label.startsWith("@")) label.removePrefix("@") else ""
-        val cleanLabel = if (icon.isNotEmpty()) "" else label
+        val iconFromLabel = if (label.startsWith("@")) label.removePrefix("@") else ""
+        val icon = iconName.ifEmpty { iconFromLabel }
+        val cleanLabel = if (iconFromLabel.isNotEmpty()) "" else label
         return KeyAction(
             action = action,
             value = value,
             label = cleanLabel,
-            labels = labels,
             icon = icon,
             display = DisplayMode.fromValue(display),
             bubble = bubble,
-            repeat = repeat,
-            sticky = sticky,
         )
     }
     return KeyAction(action = null)
@@ -367,6 +375,8 @@ data class ColorSchemeEntry(
     val keyBgColorDark: Long? = null,
     @SerialName("special_key_bg_color")
     val specialKeyBgColor: Long? = null,
+    @SerialName("special_key_bg_color_dark")
+    val specialKeyBgColorDark: Long? = null,
     @SerialName("candidate_bar_bg_color")
     val candidateBarBgColor: Long? = null,
     @SerialName("key_text_color")
@@ -1574,6 +1584,20 @@ object KeysConfigHelper {
     internal fun mergeStyleForTest(default: StyleConfig?, custom: StyleConfig?): StyleConfig? =
         mergeStyle(default, custom)
 
+    /** 仅供单元测试验证 color_schemes 合并逻辑。 */
+    internal fun mergeColorSchemesForTest(
+        default: Map<String, ColorSchemeEntry>?,
+        custom: Map<String, ColorSchemeEntry>?,
+    ): Map<String, ColorSchemeEntry>? = mergeColorSchemes(default, custom)
+
+    /** 仅供单元测试设置手势配置缓存（免加载真实 assets）。 */
+    internal fun setKeyGestureConfigForTest(
+        config: Map<String, KeyBinding>,
+        isAsciiMode: Boolean = false,
+    ) {
+        if (isAsciiMode) _keyGestureConfigEn.value = config else _keyGestureConfig.value = config
+    }
+
     private fun mergeColorSchemes(
         default: Map<String, ColorSchemeEntry>?,
         custom: Map<String, ColorSchemeEntry>?,
@@ -1595,6 +1619,7 @@ object KeysConfigHelper {
                 keyBgColor = customEntry.keyBgColor ?: base.keyBgColor,
                 keyBgColorDark = customEntry.keyBgColorDark ?: base.keyBgColorDark,
                 specialKeyBgColor = customEntry.specialKeyBgColor ?: base.specialKeyBgColor,
+                specialKeyBgColorDark = customEntry.specialKeyBgColorDark ?: base.specialKeyBgColorDark,
                 candidateBarBgColor = customEntry.candidateBarBgColor ?: base.candidateBarBgColor,
                 keyTextColor = customEntry.keyTextColor ?: base.keyTextColor,
                 keyTextColorDark = customEntry.keyTextColorDark ?: base.keyTextColorDark,
@@ -1697,10 +1722,27 @@ object KeysConfigHelper {
 
     /** 九键长按候选显示文本（keyboard.t9.keys.<id>.long_press.values 的 label，缺省 value；未配置返回 null）。 */
     fun getT9KeyLongPressLabels(id: String): List<String>? =
-        _t9GestureConfigs[id]?.longPress?.values
-            ?.map { it.label.ifEmpty { it.value } }
+        longPressDisplayItems(_t9GestureConfigs[id]?.longPress)
+
+    /**
+     * 长按气泡的显示项文本：`label` 为空时回退 `value`；两者皆空的项无法展示，丢弃。
+     *
+     * 26 键字母区（标准/横屏紧凑）、逗号键、中英键、九键共用，保证各处 label 处理一致。
+     */
+    fun longPressDisplayItems(config: LongPressAction?): List<String>? =
+        config?.values
+            ?.map { longPressItemKey(it) }
             ?.filter { it.isNotEmpty() }
             ?.takeIf { it.isNotEmpty() }
+
+    /** 长按气泡的「显示项文本 → 动作」映射；键与 [longPressDisplayItems] 完全一致（不可展示的项不进入映射）。 */
+    fun longPressActionMap(config: LongPressAction?): Map<String, KeyAction>? =
+        config?.values
+            ?.filter { longPressItemKey(it).isNotEmpty() }
+            ?.associateBy { longPressItemKey(it) }
+
+    /** 长按气泡条目的显示文本与查找键（label 优先，缺省 value）。 */
+    private fun longPressItemKey(action: KeyAction): String = action.label.ifEmpty { action.value }
 
     /** 获取九键数字键手势配置（xime.yaml keyboard.t9.keys，custom 键级覆盖）。
      *  键 id 为数字字符串 "1"~"9"；无配置返回 null（布局不启用滑动）。 */
@@ -1739,19 +1781,6 @@ object KeysConfigHelper {
             ?: key
     }
 
-    /** 获取某个按键指定手势的显示标签。 */
-    fun getGestureLabel(key: String, gesture: String, isAsciiMode: Boolean = false): String? {
-        val config = if (isAsciiMode) _keyGestureConfigEn.value else _keyGestureConfig.value
-        val kc = config[key.lowercase()] ?: return null
-        return when (gesture) {
-            "tap" -> kc.tap?.label
-            "swipe_up" -> kc.swipeUp?.label
-            "swipe_down" -> kc.swipeDown?.label
-            "long_press" -> kc.longPress?.values?.firstOrNull()?.label
-            else -> null
-        }
-    }
-
     // ── 旧公开 API（兼容） ──
     
     fun getConfig(): KeysConfig = config
@@ -1771,24 +1800,28 @@ object KeysConfigHelper {
         return configMap[key.lowercase()]?.swipeUp?.action
     }
 
-    /** 获取上滑显示文本（优先 label，fallback value） */
+    /** 获取上滑显示文本（优先 label，fallback value；仅未配置 swipe_up 时用旧默认表） */
     fun getSwipeUpLabel(key: String, isAsciiMode: Boolean = false): String? {
         val configMap = if (isAsciiMode) _keyGestureConfigEn.value else _keyGestureConfig.value
         val gesture = configMap[key.lowercase()]?.swipeUp
         if (gesture != null) {
             if (gesture.label.isNotEmpty()) return gesture.label
             if (gesture.value.isNotEmpty()) return gesture.value
+            // 显式配置了 swipe_up（如只写了 action）时不再回退旧默认符号表，
+            // 否则键面/气泡会显示与该手势无关的默认符号（q→"1"）。
+            return null
         }
         return config.swipeUp[key.lowercase()]
     }
 
-    /** 获取上滑提交值（优先 value，fallback label） */
+    /** 获取上滑提交值（优先 value，fallback label；仅未配置 swipe_up 时用旧默认表） */
     fun getSwipeUpCommitValue(key: String, isAsciiMode: Boolean = false): String? {
         val configMap = if (isAsciiMode) _keyGestureConfigEn.value else _keyGestureConfig.value
         val gesture = configMap[key.lowercase()]?.swipeUp
         if (gesture != null) {
             if (gesture.value.isNotEmpty()) return gesture.value
             if (gesture.label.isNotEmpty()) return gesture.label
+            return null
         }
         return config.swipeUp[key.lowercase()]
     }

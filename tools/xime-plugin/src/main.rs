@@ -17,6 +17,9 @@ use clap::{Args, Parser, Subcommand};
 #[derive(Parser)]
 #[command(name = "xipm", version, about, long_about = None)]
 struct Cli {
+    /// 指定设备序列号（等价 `adb -s <SERIAL>`；多设备/无线调试时使用，可写在子命令前后）
+    #[arg(short = 's', long = "device", global = true, value_name = "SERIAL")]
+    device: Option<String>,
     #[command(subcommand)]
     command: Commands,
 }
@@ -33,6 +36,8 @@ enum Commands {
     Test(TestArgs),
     /// 真机热调试：watch 源码 → 编译打包 → adb 推送 → 广播安装/重载 → 日志跟随
     Dev(DevArgs),
+    /// 真机安装：把 xipk（或插件目录，先编译打包）热安装到手机
+    Install(InstallArgs),
     /// 真机插件日志：实时跟随（logcat）或历史错误（errors.jsonl）
     Logs(LogsArgs),
     /// 创建插件骨架（main.ts + manifest.json + SDK 类型 + tsconfig + main.test.ts）
@@ -122,15 +127,24 @@ struct DevArgs {
     /// adb 可执行文件路径（缺省：$ADB / $ANDROID_HOME/platform-tools/adb / PATH）
     #[arg(long)]
     adb: Option<PathBuf>,
-    /// 指定设备序列号（adb -s；多设备/无线调试时使用）
-    #[arg(long)]
-    device: Option<String>,
     /// 不跟随设备日志（只做热更新循环）
     #[arg(long)]
     no_logs: bool,
     /// 构建产物根目录（xipk 暂存 <out>/dist）
     #[arg(long, default_value = "build/plugin-dev")]
     out: PathBuf,
+}
+
+#[derive(Args)]
+struct InstallArgs {
+    /// 待安装的 xipk 文件，或插件目录（含 manifest.json；会先编译打包）；缺省为当前目录
+    target: Option<PathBuf>,
+    /// 应用包名
+    #[arg(long, default_value = "com.kingzcheung.xime")]
+    package: String,
+    /// adb 可执行文件路径（缺省：$ADB / $ANDROID_HOME/platform-tools/adb / PATH）
+    #[arg(long)]
+    adb: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -143,9 +157,6 @@ struct LogsArgs {
     /// adb 可执行文件路径
     #[arg(long)]
     adb: Option<PathBuf>,
-    /// 指定设备序列号
-    #[arg(long)]
-    device: Option<String>,
     /// 读取历史错误（宿主 errors.jsonl，run-as；需要 debug 包）
     #[arg(long)]
     history: bool,
@@ -178,6 +189,8 @@ struct TestArgs {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    // 全局 -s/--device：dev 与 logs 共用（写在子命令前后均可）
+    let device = cli.device;
     match cli.command {
         Commands::Build(args) => run_build(args).await,
         Commands::Pack(args) => run_pack(args).await,
@@ -187,16 +200,17 @@ async fn main() -> anyhow::Result<()> {
             dir: args.dir,
             package: args.package,
             adb: args.adb,
-            device: args.device,
+            device: device.clone(),
             no_logs: args.no_logs,
             out: args.out,
         })
         .await,
+        Commands::Install(args) => run_install(args, device.clone()).await,
         Commands::Logs(args) => dev::run_logs(dev::LogsArgs {
             dir: args.dir,
             package: args.package,
             adb: args.adb,
-            device: args.device,
+            device: device.clone(),
             history: args.history,
             lines: args.lines,
             json: args.json,
@@ -303,6 +317,79 @@ async fn run_pack(args: PackArgs) -> anyhow::Result<()> {
     println!();
     println!("共 {} 个 xipk → {}", plugin_dirs.len(), args.release_dir.display());
     Ok(())
+}
+
+/// install 的输入：xipk 文件直接安装；插件目录先编译打包（与 `xipm pack` 同布局）。
+#[derive(Debug)]
+enum InstallTarget {
+    Xipk(PathBuf),
+    PluginDir(PathBuf),
+}
+
+/// 判定 install 目标：目录须含 manifest.json，文件须为 .xipk。
+fn classify_install_target(target: &Path) -> anyhow::Result<InstallTarget> {
+    if target.is_dir() {
+        if !manifest::Manifest::path_in(target).is_file() {
+            anyhow::bail!("插件目录缺少 manifest.json: {}", target.display());
+        }
+        return Ok(InstallTarget::PluginDir(target.to_path_buf()));
+    }
+    if !target.exists() {
+        anyhow::bail!("路径不存在: {}", target.display());
+    }
+    if target.extension().and_then(|e| e.to_str()) == Some("xipk") {
+        Ok(InstallTarget::Xipk(target.to_path_buf()))
+    } else {
+        anyhow::bail!(
+            "install 只接受 .xipk 文件或插件目录（含 manifest.json）: {}",
+            target.display()
+        )
+    }
+}
+
+async fn run_install(args: InstallArgs, device: Option<String>) -> anyhow::Result<()> {
+    let target = args.target.unwrap_or_else(|| PathBuf::from("."));
+    // xipk 直接安装；插件目录先编译打包（默认布局与 `xipm build` / `xipm pack` 一致）
+    let (xipk, label, log_hint) = match classify_install_target(&target)? {
+        InstallTarget::Xipk(path) => {
+            let label = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "plugin".into());
+            (path, label, "<插件目录>".to_string())
+        }
+        InstallTarget::PluginDir(dir) => {
+            let outcome = build::build_plugin(&dir, Path::new("build/plugin-js"), false).await?;
+            let xipk = pack::pack_plugin(
+                &outcome.out_dir,
+                &outcome.manifest,
+                Path::new("build/plugin-release"),
+            )?;
+            println!(
+                "✓ 打包 {} ({}) → {}",
+                outcome.manifest.id,
+                outcome.manifest.version,
+                xipk.display()
+            );
+            (xipk, outcome.manifest.id, dir.display().to_string())
+        }
+    };
+
+    let adb = dev::Adb::detect(args.adb.clone())?.with_serial(device);
+    adb.ensure_device()?;
+    let channel = dev::detect_channel(&adb, &args.package);
+    println!(
+        "▶ 安装 {} → 设备 {}",
+        xipk.display(),
+        adb.serial().unwrap_or_else(|| "默认设备".into())
+    );
+    let remote_name = format!(
+        "{}.xipk",
+        xipk.file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "plugin".into())
+    );
+    dev::install_xipk(&adb, &args.package, channel, &xipk, &remote_name, &label, &log_hint).await
 }
 
 async fn run_check(args: CheckArgs) -> anyhow::Result<()> {
@@ -489,4 +576,69 @@ fn run_init(args: InitArgs) -> anyhow::Result<()> {
     println!("✓ 已创建插件骨架 {}", target.display());
     println!("  下一步：xipm test .（与 xipm build --out dist");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 全局 `-s/--device`：子命令前后均可写（与 `adb -s` 一致），缺省为 None。
+    #[test]
+    fn device_flag_is_global_and_position_independent() {
+        let before = Cli::try_parse_from(["xipm", "-s", "SERIAL-1", "dev"]).unwrap();
+        assert_eq!(before.device.as_deref(), Some("SERIAL-1"));
+
+        let after = Cli::try_parse_from(["xipm", "dev", "-s", "SERIAL-2"]).unwrap();
+        assert_eq!(after.device.as_deref(), Some("SERIAL-2"));
+
+        let long = Cli::try_parse_from(["xipm", "logs", "--device", "SERIAL-3"]).unwrap();
+        assert_eq!(long.device.as_deref(), Some("SERIAL-3"));
+
+        let unset = Cli::try_parse_from(["xipm", "dev"]).unwrap();
+        assert_eq!(unset.device, None);
+    }
+
+    /// `-s` 是全局参数：非 adb 子命令也能解析（与 adb 的全局 `-s` 语义一致）。
+    #[test]
+    fn device_flag_is_accepted_by_other_subcommands() {
+        let cli = Cli::try_parse_from(["xipm", "-s", "SERIAL", "check"]).unwrap();
+        assert_eq!(cli.device.as_deref(), Some("SERIAL"));
+        assert!(matches!(cli.command, Commands::Check(_)));
+    }
+
+    /// install 目标判定：.xipk 文件 / 插件目录（须含 manifest.json），其余输入明确报错。
+    #[test]
+    fn classify_install_target_accepts_xipk_and_plugin_dir() {
+        let root = std::env::temp_dir().join(format!("xipm-install-classify-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+
+        let plugin = root.join("demo-plugin");
+        std::fs::create_dir_all(&plugin).unwrap();
+        std::fs::write(plugin.join("manifest.json"), "{}").unwrap();
+        let xipk = root.join("demo-plugin-1.0.0.xipk");
+        std::fs::write(&xipk, b"xipk").unwrap();
+        let bare_dir = root.join("bare");
+        std::fs::create_dir_all(&bare_dir).unwrap();
+        let other = root.join("notes.txt");
+        std::fs::write(&other, b"x").unwrap();
+
+        assert!(matches!(
+            classify_install_target(&xipk).unwrap(),
+            InstallTarget::Xipk(_)
+        ));
+        assert!(matches!(
+            classify_install_target(&plugin).unwrap(),
+            InstallTarget::PluginDir(_)
+        ));
+
+        let err = classify_install_target(&bare_dir).unwrap_err().to_string();
+        assert!(err.contains("manifest.json"), "应提示缺 manifest.json: {err}");
+        assert!(classify_install_target(&other).is_err(), "非 xipk 文件应报错");
+        assert!(
+            classify_install_target(&root.join("missing.xipk")).is_err(),
+            "不存在的路径应报错"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

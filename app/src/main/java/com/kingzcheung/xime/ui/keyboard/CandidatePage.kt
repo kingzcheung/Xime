@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
@@ -47,7 +48,6 @@ import androidx.compose.ui.layout.Measurable
 import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.layout.layoutId
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
@@ -101,6 +101,10 @@ data class CandidatePageState(
     val railSelectedPinyinIndex: Int = -1,
     /** 拼音选中胶囊强调色（对齐九键 CandidateItem）；Unspecified 时用 textColor 兜底 */
     val railAccentColor: Color = Color.Unspecified,
+    /** 右栏等分压缩（悬浮模式页高有限）：true 时 4 键均分列高（同横屏），
+     *  false 保持竖屏固定 46dp 方块——固定尺寸在悬浮矮卡片下放不下会整体溢出，
+     *  最底部的回车键被卡片圆角裁掉一半 */
+    val rightRailEqualSplit: Boolean = false,
 )
 
 /**
@@ -153,11 +157,13 @@ fun CandidatePage(
     pageScrollEvents: Flow<Int>? = null,
     onHapticFeedback: (() -> Unit)? = null,
 ) {
-    val configuration = LocalConfiguration.current
-    val isLandscape =
-        configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
-    val leftRailWidth = if (isLandscape) 48.dp else 40.dp
-    val rightRailWidth = if (isLandscape) 40.dp else 46.dp
+    // 布局按父容器真实宽度自适应（悬浮卡片/键盘收窄/分屏的容器宽 ≠ 屏幕宽），
+    // 不读屏幕方向：宽容器（横屏全屏）左右栏更紧凑，其余按竖屏形态
+    BoxWithConstraints(modifier = modifier) {
+        val isWide = maxWidth >= WIDE_CONTAINER_WIDTH
+
+    val leftRailWidth = if (isWide) 48.dp else 40.dp
+    val rightRailWidth = if (isWide) 40.dp else 46.dp
     val keyBg = if (state.keyBackgroundColor == Color.Unspecified)
         state.textColor.copy(alpha = 0.12f) else state.keyBackgroundColor
     val dividerColor = state.textColor.copy(alpha = 0.12f)
@@ -190,8 +196,8 @@ fun CandidatePage(
     }
 
     Column(
-        modifier = modifier
-            .fillMaxWidth()
+        modifier = Modifier
+            .fillMaxSize()
             .background(state.backgroundColor)
     ) {
         Row(
@@ -358,14 +364,15 @@ fun CandidatePage(
             Spacer(modifier = Modifier.width(8.dp))
 
             // ── 右栏：退格 / 上一页 / 下一页 / 回车 ──
-            // 竖屏固定方块、垂直居中分布；横屏栏高有限改为等分压缩
-            val railKeyModifier = if (isLandscape) Modifier.weight(1f) else Modifier.size(46.dp)
+            // 竖屏固定方块、垂直居中分布；宽容器/悬浮（页高有限）改为等分压缩
+            val compactRail = isWide || state.rightRailEqualSplit
+            val railKeyModifier = if (compactRail) Modifier.weight(1f) else Modifier.size(46.dp)
             Column(
                 modifier = Modifier
                     .fillMaxHeight()
                     .width(rightRailWidth)
                     .padding(vertical = 6.dp),
-                verticalArrangement = if (isLandscape) Arrangement.spacedBy(4.dp)
+                verticalArrangement = if (compactRail) Arrangement.spacedBy(4.dp)
                 else Arrangement.spacedBy(10.dp, Alignment.CenterVertically)
             ) {
                 RailKey(
@@ -432,9 +439,10 @@ fun CandidatePage(
         // 底部留白
         Spacer(
             modifier = Modifier.height(
-                if (isLandscape) 15.dp else state.bottomPaddingDp.dp
+                if (isWide) 15.dp else state.bottomPaddingDp.dp
             )
         )
+    }
     }
 }
 

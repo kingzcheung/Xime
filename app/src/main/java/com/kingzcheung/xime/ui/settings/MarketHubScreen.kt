@@ -223,6 +223,35 @@ private fun SchemesMarketTab(
     LaunchedEffect(uiState.isLoading) {
         if (!uiState.isLoading) isRefreshing = false
     }
+    if (uiState.conflictDetails.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = { viewModel.clearConflict() },
+            title = { Text("文件冲突") },
+            text = {
+                Column {
+                    Text("「${uiState.conflictSchemeName}」与已安装方案的以下文件同名但内容不同，为避免覆盖，本次安装已取消：")
+                    Spacer(Modifier.height(8.dp))
+                    uiState.conflictDetails.forEach { c ->
+                        Text(
+                            "· ${c.fileName}（已被 ${c.claimedBy.joinToString("、")} 使用）",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "可到「本地方案」卸载冲突方案后重试。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.clearConflict() }) {
+                    Text("知道了")
+                }
+            },
+        )
+    }
 
     PullToRefreshBox(
         isRefreshing = isRefreshing,

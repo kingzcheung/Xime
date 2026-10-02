@@ -122,6 +122,8 @@ class VoiceRecognitionHandler(
         finishing = false
         mainHandler.removeCallbacks(finishTimeoutRunnable)
         suppressDuplicateFinal = false
+        // 新会话：清掉上一会话与输入框的记账（写入文本/已消费前缀/核对标记）
+        resetInputBoxBookkeeping()
 
         textBeforeVoiceInput = getInputConnection()?.getTextBeforeCursor(1000, 0)?.toString() ?: ""
         textLengthBeforeVoiceInput = textBeforeVoiceInput.length
@@ -168,6 +170,15 @@ class VoiceRecognitionHandler(
     }
 
     private var lastPartialText = ""
+    // 本会话实际写入输入框的文本（无外部消费时等于 lastPartialText）。最终结果的增量对齐、
+    // "删除已上屏部分"的长度都按它算，保证删除量对得上输入框里真实存在的内容。
+    private var lastWrittenText = ""
+    // 已被外部消费的引擎累计文本前缀（应用在输入法不知情时取走了上屏内容，如微信发送后清空输入框）
+    private var consumedEnginePrefix = ""
+    // 是否核对成功过"写入的文本确实回显在输入框里"。应用不回传文本时不得误判为"被清空"，否则丢字。
+    private var writtenTextVerified = false
+    // 本会话是否已做过"回显核对"探测（每次写入都探测会多出同步 IPC，只需首次）
+    private var inputBoxEchoProbed = false
     private var lastAmplitudeUpdate = 0L
     private var smoothedAmplitude = 0f
     private var smoothedSpectrum = FloatArray(16)
@@ -188,6 +199,28 @@ class VoiceRecognitionHandler(
         finishing = false
         mainHandler.removeCallbacks(finishTimeoutRunnable)
         lastPartialText = ""
+        resetInputBoxBookkeeping()
+    }
+
+    /**
+     * 发送类动作前的会话封口（语音面板滑到"发送/撤销"抬手、常驻语音下按回车/发送键）。
+     *
+     * 与"松手收尾"（[finishRecognition] 等引擎最终结果，最长 [FINISH_TIMEOUT_MS]）不同：
+     * 用户已经把这批文本发出去了，之后再落进输入框的任何内容都是重复或错位。所以这里：
+     * 1. 立即冲刷 composing 中的部分结果——否则收尾等待期间它会被随后的按键或 composing
+     *    重写吞掉（"点键盘其他区域清空已上屏内容"）；
+     * 2. 置 [suppressDuplicateFinal]，丢弃引擎随后可能迟到的最终结果。
+     *
+     * 无已识别文本时同样封口：动作之后才吐出的结果一样不该上屏。
+     * 注意本方法不结束会话、不停止录音——由调用方继续走 endVoiceSession/onVoiceComplete。
+     */
+    fun sealPendingForSend() {
+        if (sessionAbandoned) return
+        // 结束"收尾等待"：不再等引擎最终结果，也不留超时兜底
+        finishing = false
+        mainHandler.removeCallbacks(finishTimeoutRunnable)
+        commitPendingOnRelease()
+        suppressDuplicateFinal = true
     }
 
     // 语音按钮长按抬起时调用：立即提交当前已识别的文本（不依赖可能被断连竞态吞掉的异步最终结果）
@@ -198,10 +231,21 @@ class VoiceRecognitionHandler(
         Log.d(TAG, "commitPendingOnRelease: ic=${ic != null}, partial='$partial', suppress=$suppressDuplicateFinal")
         if (ic == null) return
         if (partial.isEmpty()) return
-        val punctuatedText = addPunctuation(partial)
-        commitFinal(ic, punctuatedText, partial)
+        // 对账用"上一次写入对应的引擎文本"，必须在清空 lastPartialText 之前做
+        reconcileWithInputBox(ic)
+        val visibleText = visibleEngineText(partial.replace(" ", ""))
         suppressDuplicateFinal = true
+        if (visibleText.isEmpty()) {
+            // 本会话内容已被应用取走（如发送后清空输入框），没有可提交的增量
+            Log.d(TAG, "commitPendingOnRelease: 内容已被外部消费，跳过提交")
+            lastPartialText = ""
+            resetInputBoxBookkeeping()
+            return
+        }
+        val punctuatedText = addPunctuation(visibleText)
+        commitFinal(ic, punctuatedText, lastWrittenText)
         lastPartialText = ""
+        resetInputBoxBookkeeping()
     }
 
     /**
@@ -270,10 +314,17 @@ class VoiceRecognitionHandler(
         val cleanText = text.replace(" ", "")
         val ic = getInputConnection()
         if (ic != null && cleanText.isNotEmpty() && !cleanText.startsWith("错误:")) {
-            val punctuatedText = addPunctuation(cleanText)
-            commitFinal(ic, punctuatedText, lastPartialText)
+            // 收尾期间应用可能已把我们上屏的内容取走（发送/清空输入框）：先对账，再按可见增量提交
+            reconcileWithInputBox(ic)
+            val visibleText = visibleEngineText(cleanText)
+            if (visibleText.isNotEmpty()) {
+                commitFinal(ic, addPunctuation(visibleText), lastWrittenText)
+            } else {
+                Log.d(TAG, "handleSpeechResult: 内容已被外部消费，跳过提交")
+            }
         }
         lastPartialText = ""
+        resetInputBoxBookkeeping()
 
         if (!wasFinishing) {
             // 用户尚未松手就收到 final：流式在线插件按句回调属正常行为，该句已上屏，
@@ -304,6 +355,81 @@ class VoiceRecognitionHandler(
         }
         Log.d(TAG, "commitFinal: final='$finalText', partial='$partial'")
     }
+
+    /** 会话切换/提交结束时清理与输入框的记账。 */
+    private fun resetInputBoxBookkeeping() {
+        lastWrittenText = ""
+        consumedEnginePrefix = ""
+        writtenTextVerified = false
+        inputBoxEchoProbed = false
+    }
+
+    /**
+     * 首次写入后核对一次"应用是否真的回显我们的 composing 文本"，决定本会话是否允许
+     * "被外部消费"判定：应用不回传文本（[getTextBeforeCursor] 拿不到我们写的内容）时，
+     * 若还按"没读到 = 被清空"处理，会把后续识别内容全部丢弃。
+     */
+    private fun verifyInputBoxEcho(ic: InputConnection, written: String) {
+        if (inputBoxEchoProbed || written.isEmpty()) return
+        inputBoxEchoProbed = true
+        val onScreen = runCatching {
+            ic.getTextBeforeCursor(written.length, 0)?.toString()
+        }.getOrNull() ?: return
+        if (onScreen == written) {
+            writtenTextVerified = true
+        } else {
+            Log.d(TAG, "输入框未回显语音 composing 文本，本会话不做外部消费判定")
+        }
+    }
+
+    /**
+     * 写入/提交前与输入框对账。
+     *
+     * 应用可以在输入法完全不知情的情况下取走已经上屏的语音文本（最典型：微信点发送后清空
+     * 输入框）。而引擎的部分结果/最终结果是**整段累计**的，此时若继续整段写入，就会把已经
+     * 发出去的内容连同新内容一起灌回输入框——真机现象即"点发送后继续说话，已发送文本又回到
+     * 输入框"（2026-09-29 日志：单个会话内 partial 从"一个人"变为"一个人，两个人"，
+     * 整段 setComposingText 写进已被清空的框）。
+     *
+     * 判定：光标前的文本比我们上次写入的更短，即"我们写的内容被外部移除"→ 把本会话已识别的
+     * 引擎文本整段记为 [consumedEnginePrefix]，后续只写增量。仅在曾经核对成功过
+     * （[writtenTextVerified]，证明该应用确实回显我们的文本）时才判定，避免应用不回传文本时误判丢字。
+     */
+    private fun reconcileWithInputBox(ic: InputConnection) {
+        if (lastWrittenText.isEmpty()) return
+        val onScreen = runCatching {
+            ic.getTextBeforeCursor(lastWrittenText.length, 0)?.toString()
+        }.getOrNull() ?: return
+        if (onScreen == lastWrittenText) {
+            writtenTextVerified = true
+            return
+        }
+        if (!writtenTextVerified) return
+        // 只有"输入框内容变短"（被清空/删除）才判定为被外部消费；变长或等长（用户编辑、
+        // 应用替换成等长文本）时保守不动，避免误判丢字。
+        if (onScreen.length >= lastWrittenText.length) return
+        consumedEnginePrefix = lastPartialText
+        // "撤销语音输入"按会话开始时的框长度计算删除量，外部清空后基线要跟着落到当前框内容
+        textLengthBeforeVoiceInput = onScreen.length
+        lastWrittenText = ""
+        Log.d(TAG, "输入框已被外部清空/取走内容，本会话已识别文本记为已消费: '$consumedEnginePrefix'")
+    }
+
+    /**
+     * 引擎结果按"已消费前缀"裁剪出真正该写进输入框的可见文本。
+     * 同时去掉开头标点：被消费的那句已经带着标点发出去了，新句子不该以"，"开头。
+     */
+    private fun visibleEngineText(engineText: String): String {
+        if (consumedEnginePrefix.isEmpty()) return engineText
+        val visible = if (engineText.startsWith(consumedEnginePrefix)) {
+            engineText.substring(consumedEnginePrefix.length)
+        } else {
+            // 引擎改写了已消费部分，无法可靠切分：整段写入以免丢内容（记日志便于真机排查）
+            Log.d(TAG, "引擎结果不再以已消费前缀开头，按整段写入: '$engineText'")
+            engineText
+        }
+        return visible.trimStart('，', '。', '、', ',', '.', '！', '？', '；', '：', ' ', '\n')
+    }
     
     private fun addPunctuation(text: String): String {
         val cleanText = text.trim().replace(" ", "")
@@ -326,17 +452,24 @@ class VoiceRecognitionHandler(
     private fun handlePartialResult(text: String) {
         if (sessionAbandoned || suppressDuplicateFinal) return
         if (text == lastPartialText) return
+
+        val ic = getInputConnection()
+        // 对账必须在更新 lastPartialText 之前：判定"已消费"要用上一次写入对应的引擎文本
+        if (ic != null) reconcileWithInputBox(ic)
+
         lastPartialText = text
         Log.d(TAG, "Speech result (partial): $text")
         
-        // 过滤掉空格，避免显示空白
-        val cleanText = text.replace(" ", "")
+        // 过滤掉空格，避免显示空白；已被外部消费的前缀（如已发送内容）不再回写
+        val cleanText = visibleEngineText(text.replace(" ", ""))
         if (cleanText.isEmpty()) return
         
-        val ic = getInputConnection()
         if (ic != null) {
             onComposingWritten()
             ic.setComposingText(cleanText, 1)
+            lastWrittenText = cleanText
+            // 首次写入后回读一次，确认该应用确实回显 composing 文本（之后才允许做"被外部消费"判定）
+            verifyInputBoxEcho(ic, cleanText)
         }
         onStateChanged(getState().copy(voiceRecognizedText = cleanText))
     }
@@ -347,6 +480,7 @@ class VoiceRecognitionHandler(
             lastPartialText = ""
             suppressDuplicateFinal = false
             sessionAbandoned = false
+            resetInputBoxBookkeeping()
         }
         // 收尾等待最终结果期间，引擎 stop 产生的 IDLE 不覆盖"正在识别..."显示
         if (finishing && state == RecognitionState.IDLE) return
@@ -360,6 +494,7 @@ class VoiceRecognitionHandler(
         finishing = false
         mainHandler.removeCallbacks(finishTimeoutRunnable)
         lastPartialText = ""
+        resetInputBoxBookkeeping()
         if (!wasFinishing) {
             // 用户尚未松手时引擎报错：UI 经 onVoiceComplete 恢复后松手停止链即失效，
             // 必须在这里显式停止录音（释放麦克风/引擎连接）；置抑制标志丢弃错误后

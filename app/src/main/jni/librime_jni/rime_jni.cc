@@ -6,6 +6,10 @@
 #include <rime/dict/reverse_lookup_dictionary.h>
 #include <rime/service.h>
 #include <rime/schema.h>
+#include <rime/dict/db_utils.h>
+#include <rime/dict/table_db.h>
+#include <rime/dict/user_db.h>
+#include <rime/lever/user_dict_manager.h>
 #include "t9_processor.h"
 #include "t9_patch_utils.h"
 #include "t9_digit_userdict.h"
@@ -832,6 +836,138 @@ public:
 
         LOGI("User dict sync completed successfully");
         return true;
+    }
+
+    /**
+     * 用户词库操作统一包装：librime 要求这些操作前用户词典处于**关闭**状态
+     * （user_dict_manager.h "the user dict should be closed before the following
+     * operations"），且 leveldb 在同一进程内重复加锁会失败 ⇒
+     * 先销毁会话 → 执行 op → 重建会话（与 syncUserData / deploy 同款）。
+     */
+    template <typename F>
+    auto withUserDictClosed(F op) -> decltype(op()) {
+        if (session_id_) {
+            rime->destroy_session(session_id_);
+            session_id_ = 0;
+        }
+        auto result = op();
+        session_id_ = rime->create_session();
+        if (!session_id_) {
+            LOGE("Failed to create session after user dict operation");
+        } else {
+            reapplyPageSizeIfNeeded();
+        }
+        return result;
+    }
+
+    /** 取 userdb 组件（Export/Import 都依赖它；缺失时不能构造 UserDictManager）。 */
+    rime::UserDb::Component* requireUserDbComponent(const char* where) {
+        rime::LoadModules(rime::kDeployerModules);
+        rime::UserDb::Component* component = rime::UserDb::Require("userdb");
+        if (!component) {
+            LOGE("%s: userdb component not registered", where);
+        }
+        return component;
+    }
+
+    /**
+     * 读取用户词库词条为文本码表文本（词<TAB>码<TAB>频率），不落盘。
+     * 库不存在/为空/打不开时返回空串（调用方按"暂无词条"处理）。
+     */
+    std::string readUserDictText(const std::string& dict_name) {
+        if (!rime) {
+            LOGE("readUserDictText: rime not available");
+            return std::string();
+        }
+        rime::UserDb::Component* component = requireUserDbComponent("readUserDictText");
+        if (!component) {
+            return std::string();
+        }
+
+        return withUserDictClosed([&]() -> std::string {
+            std::string text;
+            rime::the<rime::Db> db(component->Create(dict_name));
+            if (!db->OpenReadOnly()) {
+                LOGE("readUserDictText: cannot open '%s'", dict_name.c_str());
+                return text;
+            }
+            if (!rime::UserDbHelper(db.get()).IsUserDb()) {
+                LOGE("readUserDictText: '%s' is not a userdb", dict_name.c_str());
+                db->Close();
+                return text;
+            }
+            {
+                // DbSource 构造即 QueryMetadata() + QueryAll()；逐条读原始记录。
+                // 它持有的 leveldb 游标必须**先于** db->Close() 析构：否则 leveldb 会
+                // 因 VersionSet 中仍有活跃 Version 而触发断言崩溃
+                // （leveldb/db/version_set.cc: dummy_versions_.next_ == &dummy_versions_）。
+                rime::DbSource source(db.get());
+                std::string key, value;
+                int count = 0;
+                while (source.Get(&key, &value)) {
+                    // 现成的「库记录 -> 码表行」转换：产出 [词, 码, 频率]，
+                    // 并跳过已被标记删除的条目（commits < 0）
+                    rime::Tsv row;
+                    if (!rime::TableDb::format.formatter(key, value, &row))
+                        continue;
+                    for (size_t i = 0; i < row.size(); ++i) {
+                        if (i) text += '\t';
+                        text += row[i];
+                    }
+                    text += '\n';
+                    ++count;
+                }
+                LOGI("readUserDictText: '%s' -> %d entr(ies)", dict_name.c_str(), count);
+            }
+            db->Close();
+            return text;
+        });
+    }
+
+    /**
+     * 导出用户词库为文本码表文件（`词<TAB>码<TAB>频率` + `#@` 元数据注释头）。
+     * 走 librime 的 `UserDictManager::Export` —— 与 PC 端（小狼毫/鼠须管）**同一实现**，
+     * 文件可互通；只导出未删除的条目（commits < 0 的会被跳过）。
+     * 返回导出条目数，失败返回 -1。
+     */
+    int exportUserDict(const std::string& dict_name, const std::string& text_file) {
+        if (!rime) {
+            LOGE("exportUserDict: rime not available");
+            return -1;
+        }
+        if (!requireUserDbComponent("exportUserDict")) {
+            return -1;
+        }
+        return withUserDictClosed([&]() -> int {
+            rime::UserDictManager manager(&rime::Service::instance().deployer());
+            // rime::path 的 string 构造是 explicit（故意禁掉隐式转换），
+            // 且它内部按 UTF-8 -> 本地编码转换，正好匹配 Kotlin 传来的 UTF-8 路径
+            int count = manager.Export(dict_name, rime::path(text_file));
+            LOGI("exportUserDict: '%s' -> %d entr(ies)", dict_name.c_str(), count);
+            return count;
+        });
+    }
+
+    /**
+     * 从文本码表文件导入用户词库（`词<TAB>码[<TAB>频率]`，`#` 注释与 `#@` 元数据行忽略）。
+     * 走 librime 的 `UserDictManager::Import`，**合并**语义（同词条取较大 commits，
+     * 负 commits 视为删除标记），不会清空原有条目。
+     * 返回导入条目数，失败返回 -1。
+     */
+    int importUserDict(const std::string& dict_name, const std::string& text_file) {
+        if (!rime) {
+            LOGE("importUserDict: rime not available");
+            return -1;
+        }
+        if (!requireUserDbComponent("importUserDict")) {
+            return -1;
+        }
+        return withUserDictClosed([&]() -> int {
+            rime::UserDictManager manager(&rime::Service::instance().deployer());
+            int count = manager.Import(dict_name, rime::path(text_file));
+            LOGI("importUserDict: '%s' <- %d entr(ies)", dict_name.c_str(), count);
+            return count;
+        });
     }
 
     bool deploySchema(const char* schemaId) {
@@ -2147,6 +2283,62 @@ Java_com_kingzcheung_xime_rime_RimeEngine_nativeSyncUserData(
     jobject thiz
 ) {
     return Rime::Instance().syncUserData() ? JNI_TRUE : JNI_FALSE;
+}
+
+// 读取用户词库为文本码表文本（词<TAB>码<TAB>频率）；不落盘，空库/失败返回 null
+JNIEXPORT jstring JNICALL
+Java_com_kingzcheung_xime_rime_RimeEngine_nativeReadUserDictText(
+    JNIEnv* env,
+    jobject thiz,
+    jstring dict_name
+) {
+    if (!dict_name) return nullptr;
+    const char* name = env->GetStringUTFChars(dict_name, nullptr);
+    if (!name) return nullptr;
+    std::string text = Rime::Instance().readUserDictText(name);
+    env->ReleaseStringUTFChars(dict_name, name);
+    if (text.empty()) return nullptr;
+    return env->NewStringUTF(text.c_str());
+}
+
+// 导出用户词库为文本码表文件（词<TAB>码<TAB>频率，带 #@ 元数据头）；返回条目数，失败 -1
+JNIEXPORT jint JNICALL
+Java_com_kingzcheung_xime_rime_RimeEngine_nativeExportUserDict(
+    JNIEnv* env,
+    jobject thiz,
+    jstring dict_name,
+    jstring text_file
+) {
+    if (!dict_name || !text_file) return -1;
+    const char* name = env->GetStringUTFChars(dict_name, nullptr);
+    const char* file = env->GetStringUTFChars(text_file, nullptr);
+    jint count = -1;
+    if (name && file) {
+        count = static_cast<jint>(Rime::Instance().exportUserDict(name, file));
+    }
+    if (name) env->ReleaseStringUTFChars(dict_name, name);
+    if (file) env->ReleaseStringUTFChars(text_file, file);
+    return count;
+}
+
+// 从文本码表文件导入用户词库（合并语义，不清空原有条目）；返回条目数，失败 -1
+JNIEXPORT jint JNICALL
+Java_com_kingzcheung_xime_rime_RimeEngine_nativeImportUserDict(
+    JNIEnv* env,
+    jobject thiz,
+    jstring dict_name,
+    jstring text_file
+) {
+    if (!dict_name || !text_file) return -1;
+    const char* name = env->GetStringUTFChars(dict_name, nullptr);
+    const char* file = env->GetStringUTFChars(text_file, nullptr);
+    jint count = -1;
+    if (name && file) {
+        count = static_cast<jint>(Rime::Instance().importUserDict(name, file));
+    }
+    if (name) env->ReleaseStringUTFChars(dict_name, name);
+    if (file) env->ReleaseStringUTFChars(text_file, file);
+    return count;
 }
 
 // 更新 last_build_time 为当前时间，避免下次增量检测误判

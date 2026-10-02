@@ -247,7 +247,12 @@ class WirelessImportHelper(private val context: Context) {
                                     saved = result.success
                                     _uploadResults.trySend(
                                         if (result.success) UploadResult(fileName = name, success = true)
-                                        else UploadResult(fileName = name, success = false, error = "保存失败")
+                                        else UploadResult(
+                                            fileName = name, success = false,
+                                            error = if (result.conflicts.isNotEmpty())
+                                                "${result.conflicts.first().fileName} 与已安装内容不同，已取消"
+                                            else "保存失败"
+                                        )
                                     )
                                 }
                                 else -> {

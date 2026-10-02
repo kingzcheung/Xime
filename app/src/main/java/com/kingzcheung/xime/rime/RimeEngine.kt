@@ -606,6 +606,46 @@ class RimeEngine {
         }
     }
 
+    /**
+     * 读取用户词库词条，返回文本码表文本（每行 `词<TAB>码<TAB>频率`）。
+     * 与 [syncUserData] 同构：native 侧先销毁会话再遍历、遍历后重建会话
+     * （librime 要求这些操作前用户词典必须已关闭），故持 rimeLock 独占。
+     * 库不存在或打不开时返回空串。
+     */
+    fun readUserDictText(dictName: String): String {
+        if (!isInitialized || dictName.isEmpty()) return ""
+        locked {
+            return nativeReadUserDictText(dictName) ?: ""
+        }
+    }
+
+    /**
+     * 导出用户词库为文本码表文件（`词<TAB>码<TAB>频率` + `#@` 元数据注释头）。
+     * 走 librime `UserDictManager::Export`，与 PC 端（小狼毫/鼠须管）**同一实现**，
+     * 文件可互通；已标记删除的条目不会写出。
+     * @param textFilePath 必须是真实文件路径（librime 直接开 ofstream）。
+     * @return 导出的条目数；失败返回 -1。
+     */
+    fun exportUserDict(dictName: String, textFilePath: String): Int {
+        if (!isInitialized || dictName.isEmpty() || textFilePath.isEmpty()) return -1
+        locked {
+            return nativeExportUserDict(dictName, textFilePath)
+        }
+    }
+
+    /**
+     * 从文本码表文件导入进用户词库（**合并**语义：同词条取较大频率，负频率视为删除标记，
+     * 不会清空原有条目）。走 librime `UserDictManager::Import`。
+     * @param textFilePath 必须是真实文件路径（librime 的 TsvReader 直接开 ifstream）。
+     * @return 成功解析并写入的条目数；失败返回 -1。
+     */
+    fun importUserDict(dictName: String, textFilePath: String): Int {
+        if (!isInitialized || dictName.isEmpty() || textFilePath.isEmpty()) return -1
+        locked {
+            return nativeImportUserDict(dictName, textFilePath)
+        }
+    }
+
     fun lookupText(text: String): String {
         if (!isInitialized || text.isEmpty()) return ""
         return tryLocked("") {
@@ -791,6 +831,9 @@ class RimeEngine {
     }
     private external fun nativeStartMaintenance(full: Boolean): Boolean
     private external fun nativeSyncUserData(): Boolean
+    private external fun nativeReadUserDictText(dictName: String): String?
+    private external fun nativeExportUserDict(dictName: String, textFilePath: String): Int
+    private external fun nativeImportUserDict(dictName: String, textFilePath: String): Int
     private external fun nativeDeploy(): Boolean
     private external fun nativeDeploySchema(schemaId: String): Boolean
     private external fun nativeLookupText(text: String): String

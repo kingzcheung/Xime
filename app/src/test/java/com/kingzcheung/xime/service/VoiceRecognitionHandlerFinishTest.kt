@@ -241,4 +241,164 @@ class VoiceRecognitionHandlerFinishTest {
         verify(mockInputConnection, never()).setComposingText(any(), anyInt())
         verify(mockInputConnection, never()).commitText(any(), anyInt())
     }
+
+    // ---- 发送类动作前的封口（sealPendingForSend）----
+
+    @Test
+    fun `发送封口立即提交已识别文本并丢弃迟到的最终结果`() {
+        onPartial.invoke("你好")
+        handler.sealPendingForSend()
+
+        // 立即冲刷 composing：收尾 + 补齐启发式句读（与松手兜底同一条路径）
+        verify(mockInputConnection).finishComposingText()
+        verify(mockInputConnection).commitText(eq("，"), eq(1))
+        // 封口自身不结束会话/不停止录音：收尾交给调用方的 endVoiceSession
+        verify(mockManager, never()).stopRecognition()
+        assertEquals(0, voiceCompleteCount)
+
+        // 引擎随后才吐出的最终结果被丢弃，不再写入输入框
+        onResult.invoke("你好世界再见")
+        verify(mockInputConnection, times(1)).commitText(any(), anyInt())
+        assertEquals(1, voiceCompleteCount)
+    }
+
+    @Test
+    fun `收尾等待中封口则立即提交并取消超时兜底`() {
+        onPartial.invoke("你好")
+        handler.finishRecognition()
+        assertEquals(1, posted.size)
+
+        handler.sealPendingForSend()
+
+        // 超时兜底被取消，已识别文本立即落盘（不等引擎最终结果）
+        assertTrue(posted.isEmpty())
+        verify(mockInputConnection).finishComposingText()
+        verify(mockInputConnection).commitText(eq("，"), eq(1))
+        assertEquals(0, voiceCompleteCount)
+
+        runTimeouts()
+        onResult.invoke("你好世界再见")
+        verify(mockInputConnection, times(1)).commitText(any(), anyInt())
+        assertEquals(1, voiceCompleteCount)
+    }
+
+    @Test
+    fun `封口后收尾不再等待引擎最终结果`() {
+        onPartial.invoke("你好")
+        handler.sealPendingForSend()
+        handler.finishRecognition()
+
+        // 已无待提交文本：收尾直接结束，也不安排超时兜底
+        verify(mockManager).stopRecognition()
+        assertEquals(1, voiceCompleteCount)
+        assertTrue(posted.isEmpty())
+
+        runTimeouts()
+        verify(mockInputConnection, times(1)).commitText(any(), anyInt())
+    }
+
+    @Test
+    fun `无已识别文本时封口也丢弃迟到的部分与最终结果`() {
+        handler.sealPendingForSend()
+
+        verify(mockInputConnection, never()).commitText(any(), anyInt())
+        verify(mockInputConnection, never()).finishComposingText()
+
+        // 动作之后引擎才吐出的结果不该上屏
+        onPartial.invoke("你好")
+        onResult.invoke("你好")
+        verify(mockInputConnection, never()).setComposingText(any(), anyInt())
+        verify(mockInputConnection, never()).commitText(any(), anyInt())
+        assertEquals(1, voiceCompleteCount)
+    }
+
+    @Test
+    fun `会话被丢弃后封口不写入任何文本`() {
+        onPartial.invoke("你好")
+        handler.abandonSession()
+        handler.sealPendingForSend()
+
+        verify(mockInputConnection, never()).commitText(any(), anyInt())
+        verify(mockInputConnection, never()).finishComposingText()
+    }
+
+    // ---- 应用取走/清空输入框后的对账（微信点发送后清空输入框：已发送文本不得回灌）----
+
+    /** 模拟应用侧输入框（光标前文本）：随 setComposingText/commitText 变化，测试可模拟"发送后清空"。 */
+    private var fakeBoxText = ""
+
+    private fun wireFakeInputBox() {
+        fakeBoxText = ""
+        whenever(mockInputConnection.getTextBeforeCursor(anyInt(), anyInt())).thenAnswer {
+            val n = it.getArgument<Int>(0)
+            fakeBoxText.takeLast(n.coerceAtMost(fakeBoxText.length))
+        }
+        whenever(mockInputConnection.setComposingText(any(), anyInt())).thenAnswer {
+            fakeBoxText = it.getArgument<CharSequence>(0).toString()
+            true
+        }
+        whenever(mockInputConnection.commitText(any(), anyInt())).thenAnswer {
+            fakeBoxText += it.getArgument<CharSequence>(0).toString()
+            true
+        }
+    }
+
+    @Test
+    fun `应用清空输入框后部分结果只写增量不回写已发送内容`() {
+        wireFakeInputBox()
+
+        // 说了"一个人"：整段写入并完成回显核对
+        onPartial.invoke("一个人")
+        assertEquals("一个人", fakeBoxText)
+
+        // 微信发送后清空输入框（输入法不知情）
+        fakeBoxText = ""
+
+        // 继续说话：引擎给的是整段累计结果
+        onPartial.invoke("一个人，两个人")
+
+        // 只写新说出来的部分，已发送的"一个人"不再回写
+        assertEquals("两个人", fakeBoxText)
+        verify(mockInputConnection, never()).setComposingText(eq("一个人，两个人"), anyInt())
+        assertEquals("两个人", stateChanges.last().voiceRecognizedText)
+    }
+
+    @Test
+    fun `应用清空输入框后最终结果只提交增量不整段回写`() {
+        wireFakeInputBox()
+        onPartial.invoke("一个人")
+        fakeBoxText = ""
+
+        onResult.invoke("一个人，两个人。")
+
+        // 不再走"删除已上屏部分 + 整段重写"，已发送内容不会被写回
+        verify(mockInputConnection, never()).deleteSurroundingText(anyInt(), anyInt())
+        verify(mockInputConnection, never()).commitText(eq("一个人，两个人。"), anyInt())
+        assertEquals("两个人。", fakeBoxText)
+    }
+
+    @Test
+    fun `已发送内容被全部消费时不再落任何字符`() {
+        wireFakeInputBox()
+        onPartial.invoke("你好")
+        fakeBoxText = ""
+
+        // 最终结果相对已发送内容只多一个句号：不该在空框里留下孤立标点
+        onResult.invoke("你好。")
+
+        verify(mockInputConnection, never()).commitText(any(), anyInt())
+        assertEquals("", fakeBoxText)
+    }
+
+    @Test
+    fun `应用不回显语音文本时不判定已消费`() {
+        // 应用侧读不到我们写的内容（getTextBeforeCursor 恒为空）：不得判定"被清空"，否则内容全丢
+        whenever(mockInputConnection.getTextBeforeCursor(anyInt(), anyInt())).thenReturn("")
+
+        onPartial.invoke("一个人")
+        onPartial.invoke("一个人，两个人")
+
+        // 行为与修复前一致：整段写入
+        verify(mockInputConnection).setComposingText(eq("一个人，两个人"), eq(1))
+    }
 }

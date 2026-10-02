@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.EmojiEmotions
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.twotone.EmojiEmotions
+import androidx.compose.material.icons.twotone.KeyboardAlt
 import androidx.compose.material.icons.twotone.KeyboardCapslock
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -91,7 +92,6 @@ import com.kingzcheung.xime.util.SubcharHelper
 import com.kingzcheung.xime.viewmodel.KeyboardUiState
 import com.kingzcheung.xime.viewmodel.KeyboardViewModel
 import com.kingzcheung.xime.viewmodel.ShiftMode
-import com.kingzcheung.xime.keyboard.OverlayRoute
 import com.kingzcheung.xime.ui.theme.KeyboardThemes
 import com.kingzcheung.xime.ui.theme.keyboardBackground
 
@@ -139,8 +139,9 @@ fun KeyboardLayout(
         ?: if (uiState.isDarkTheme) longToColor(kbColors.keyTextColorDark) else longToColor(kbColors.keyTextColor)
     val specialKeyBackgroundColor = if (uiState.isDarkTheme) kbColors.specialKeyBgColorDark?.let { longToColor(it) }
         ?: themeSpecialKeyColor else kbColors.specialKeyBgColor?.let { longToColor(it) } ?: themeSpecialKeyColor
-    val specialKeyTextColor = if (uiState.isDarkTheme) Color.White
-        else KeyboardThemes.getSpecialKeyTextColor(uiState.themeId, false)
+    val specialKeyTextColor = KeyboardThemes.getSpecialKeyTextColorForBackground(
+        specialKeyBackgroundColor, keyTextColor
+    )
     val bubbleBgColor = if (uiState.isDarkTheme) themeScheme.specialKeyDark
         else themeScheme.specialKeyLight
     val kbShadow = KeysConfigHelper.getKeyboardShadow()
@@ -161,14 +162,8 @@ fun KeyboardLayout(
     val onCommitText = callbacks.onCommitText
     val onGestureAction: (GestureAction, String) -> Unit = { action, value ->
         when (action) {
-            GestureAction.SWITCH_ROUTE -> {
-                val overlayRoute = when (value) {
-                    "emoji" -> OverlayRoute.Emoji
-                    "symbol" -> OverlayRoute.Symbol
-                    else -> null
-                }
-                overlayRoute?.let { viewModel.showOverlay(it) }
-            }
+            // 面板切换映射的唯一实现（三处 UI 手势入口共用，含 clipboard）
+            GestureAction.SWITCH_ROUTE -> switchRouteOverlay(value)?.let { viewModel.showOverlay(it) }
             GestureAction.TOGGLE_ASCII -> {
                 FileLogger.i("XimeKeyboard", "earth key toggle_ascii tapped, ui ascii=${uiState.isAsciiMode}")
                 viewModel.resetShift()
@@ -195,24 +190,9 @@ fun KeyboardLayout(
         }
     }
     val suppressCursorMove = LocalSuppressCursorMove.current
-    var swipeUpHintsEnabled by remember {
-        mutableStateOf(
-            SettingsPreferences.isSwipeUpHintsEnabled(
-                context
-            )
-        )
-    }
-    var swipeDownHintsEnabled by remember {
-        mutableStateOf(
-            SettingsPreferences.isSwipeDownHintsEnabled(
-                context
-            )
-        )
-    }
     var landscapeSplitKeyboardEnabled by remember {
         mutableStateOf(SettingsPreferences.isLandscapeSplitKeyboardEnabled(context))
     }
-    val effectiveSwipeDownHintsEnabled = swipeDownHintsEnabled
 
     // 监听设置变化
     DisposableEffect(context) {
@@ -220,12 +200,6 @@ fun KeyboardLayout(
         val listener =
             android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
                 when (key) {
-                    SettingsPreferences.KEY_SWIPE_UP_HINTS_ENABLED ->
-                        swipeUpHintsEnabled = SettingsPreferences.isSwipeUpHintsEnabled(context)
-
-                    SettingsPreferences.KEY_SWIPE_DOWN_HINTS_ENABLED ->
-                        swipeDownHintsEnabled = SettingsPreferences.isSwipeDownHintsEnabled(context)
-
                     SettingsPreferences.KEY_LANDSCAPE_SPLIT_KEYBOARD_ENABLED ->
                         landscapeSplitKeyboardEnabled =
                             SettingsPreferences.isLandscapeSplitKeyboardEnabled(context)
@@ -307,8 +281,6 @@ fun KeyboardLayout(
                 viewModel = viewModel,
                 callbacks = callbacks,
                 uiState = uiState,
-                swipeUpHintsEnabled = swipeUpHintsEnabled,
-                swipeDownHintsEnabled = effectiveSwipeDownHintsEnabled,
                 isAsciiMode = isAsciiMode,
                 keyRows = keyRows,
                 configVersion = cfgVer,
@@ -353,8 +325,6 @@ fun KeyboardLayout(
                         enterKeyText = enterKeyText,
                         suppressCursorMove = suppressCursorMove,
                         processSwipeState = { state, bounds -> processSwipeState(state, bounds) },
-                        swipeUpHintsEnabled = swipeUpHintsEnabled,
-                        swipeDownHintsEnabled = effectiveSwipeDownHintsEnabled,
                         configVersion = cfgVer,
                     )
                     // 行数由 layout.rows 驱动（最多 5 行，含可选数字行）；语音模式用固定占位行
@@ -444,6 +414,18 @@ fun KeyboardLayout(
  * - 其余动作（编辑/删除/回车/空格/清空/面板切换等）→ [onGestureAction]（UI 拦截层 → 服务层）
  * - NONE / null → 不触发
  */
+/**
+ * 九键数字键点按是否被用户**显式**改绑。
+ *
+ * [parseKeyAction] 会把 `tap` 缺省的 action 兜底为 [GestureAction.SEND_RIME] 且 value 为空，
+ * 因此「仅配置 label」的内置数字键（如 `"3": { tap: { label: "DEF" } }`）也会得到非 null 的
+ * action。这类配置不属于显式改绑，必须保持内置九键数字输入——否则点按会把键面字母（"DEF"
+ * 取首字符 'd'）送进 RIME，数字键退化为首字母简拼。
+ */
+internal fun t9DigitTapRebinds(tap: KeyAction?): Boolean =
+    tap != null && tap.action != null &&
+        (tap.action != GestureAction.SEND_RIME || tap.value.isNotEmpty())
+
 internal fun invokeKeyAction(
     action: KeyAction?,
     onKeyPress: (String) -> Unit,
@@ -458,6 +440,73 @@ internal fun invokeKeyAction(
         GestureAction.NONE -> Unit
         else -> onGestureAction?.invoke(type, value)
     }
+}
+
+/**
+ * 可上屏键（字母/数字等）的手势动作分发。
+ *
+ * - 未配置动作、COMMIT、SEND_RIME → 走 [onKeyPress]（沿用输入法组合/候选语义；调用方传入
+ *   已按 shift 处理过的 [fallbackValue]，避免绕过大小写）；
+ * - NONE → 视为未绑定，不触发；
+ * - 其余动作（复制/粘贴/光标移动/面板切换等）→ [invokeKeyAction]。
+ */
+internal fun dispatchKeyActionOrPress(
+    action: KeyAction?,
+    fallbackValue: String?,
+    onKeyPress: (String) -> Unit,
+    onCommitText: ((String) -> Unit)?,
+    onGestureAction: ((GestureAction, String) -> Unit)?,
+) {
+    when (action?.action) {
+        null, GestureAction.COMMIT, GestureAction.SEND_RIME -> fallbackValue?.let(onKeyPress)
+        GestureAction.NONE -> Unit
+        else -> invokeKeyAction(action, onKeyPress, onCommitText, onGestureAction)
+    }
+}
+
+/**
+ * 长按气泡选中项的处理（26 键字母区标准/紧凑、逗号键、中英键共用）。
+ *
+ * - 未配置动作（action 为 null）或 COMMIT → 上屏：`value` 优先，其次气泡显示文本（label）；
+ * - 其余动作 → 手势分发（`none` 交给分发的空实现吸收，不会上屏）。
+ *
+ * 说明：原实现直接上屏气泡显示文本，`{ label: "，", value: "。" }` 会打出"，"而不是"。"；
+ * 且 `action: null` 会走到 `action!!` 崩溃，这里一并按"未配置动作"处理。
+ */
+internal fun dispatchLongPressSelection(
+    selected: String,
+    actionMap: Map<String, KeyAction>?,
+    onKeyPress: (String) -> Unit,
+    onCommitText: ((String) -> Unit)?,
+    onGestureAction: ((GestureAction, String) -> Unit)?,
+) {
+    val gesture = actionMap?.get(selected)
+    val action = gesture?.action
+    if (gesture != null && action != null && action != GestureAction.COMMIT) {
+        onGestureAction?.invoke(action, gesture.value.ifEmpty { selected })
+    } else {
+        (onCommitText ?: onKeyPress)(gesture?.value?.takeIf { it.isNotEmpty() } ?: selected)
+    }
+}
+
+/**
+ * 上滑手势处理器（26 键字母区标准/紧凑两套渲染共用）。
+ *
+ * - 未配置 swipe_up 且无旧默认表取值 → 返回 null（不检测上滑）；
+ * - `action: none` → 视为未绑定，返回 null；
+ * - 其余交给 [dispatchKeyActionOrPress]（COMMIT/未配置 → 原有上滑上屏；其它动作 → 手势分发）。
+ */
+internal fun swipeUpHandlerFor(
+    swipeUp: KeyAction?,
+    commitValue: String?,
+    onKeyPress: (String) -> Unit,
+    onCommitText: ((String) -> Unit)?,
+    onGestureAction: ((GestureAction, String) -> Unit)?,
+): ((String) -> Unit)? {
+    if (swipeUp?.action == GestureAction.NONE) return null
+    if (swipeUp == null && commitValue == null) return null
+    // 参数为按键组件回传的上滑提示文本（本处理器用不到，忽略）
+    return { _: String -> dispatchKeyActionOrPress(swipeUp, commitValue, onKeyPress, onCommitText, onGestureAction) }
 }
 
 /** 一行内的共享渲染参数（颜色/回调等），供行循环与功能键组件复用。 */
@@ -486,8 +535,6 @@ private class QwertyRowEnv(
     val enterKeyText: String,
     val suppressCursorMove: MutableState<Boolean>,
     val processSwipeState: (SwipeState, Rect) -> Unit,
-    val swipeUpHintsEnabled: Boolean,
-    val swipeDownHintsEnabled: Boolean,
     val configVersion: Int,
     /** 横屏紧凑模式（手机）：字母段用 [CompactKeyboardRowWithConfig] 并套用 [fontSize]/[swipeFontSize]；平板为 false，走完整模式组件。 */
     val landscape: Boolean = false,
@@ -610,8 +657,6 @@ private fun QwertyRow(
                         onSwipeStateChange = { state, bounds -> env.processSwipeState(state, bounds) },
                         onKeyPressDown = env.onKeyPressDown,
                         onKeyRelease = env.onKeyRelease,
-                        swipeDownHintsEnabled = env.swipeDownHintsEnabled,
-                        swipeUpHintsEnabled = env.swipeUpHintsEnabled,
                         onCommitText = env.onCommitText,
                         onGestureAction = env.onGestureAction,
                         configVersion = env.configVersion,
@@ -628,8 +673,6 @@ private fun QwertyRow(
                         onSwipeStateChange = { state, bounds -> env.processSwipeState(state, bounds) },
                         onKeyPressDown = env.onKeyPressDown,
                         onKeyRelease = env.onKeyRelease,
-                        swipeDownHintsEnabled = env.swipeDownHintsEnabled,
-                        swipeUpHintsEnabled = env.swipeUpHintsEnabled,
                         onCommitText = env.onCommitText,
                         onGestureAction = env.onGestureAction,
                         configVersion = env.configVersion,
@@ -642,6 +685,16 @@ private fun QwertyRow(
 }
 
 /** 按 id 分派功能键组件。 */
+/**
+ * 渲染层已实现组件的功能键 id。
+ *
+ * 必须与 [KeysConfigHelper.FUNCTION_KEY_IDS] 保持一致：只进配置集合、没有组件的 id 会渲染成
+ * 「占宽度但看不见、也不响应」的死键。两者一致性由单测保证（`FunctionKeyRenderContractTest`）。
+ */
+internal val RENDERED_FUNCTION_KEY_IDS: Set<String> = setOf(
+    "shift", "delete", "mode_change", "comma", "space", "earth", "enter", "symbol", "emoji", "voice",
+)
+
 @Composable
 private fun FunctionKeyCell(id: String, env: QwertyRowEnv, modifier: Modifier) {
     when (id) {
@@ -652,7 +705,70 @@ private fun FunctionKeyCell(id: String, env: QwertyRowEnv, modifier: Modifier) {
         "space" -> SpaceCell(env, modifier)
         "earth" -> EarthCell(env, modifier)
         "enter" -> EnterCell(env, modifier)
+        "symbol" -> PanelActionCell(
+            "symbol", GestureAction.TOGGLE_SYMBOLS, "", rememberVectorPainter(Icons.TwoTone.KeyboardAlt), env, modifier,
+        )
+        "emoji" -> PanelActionCell(
+            "emoji", GestureAction.SWITCH_ROUTE, "emoji", rememberVectorPainter(Icons.Filled.EmojiEmotions), env, modifier,
+        )
+        "voice" -> PanelActionCell(
+            "voice", GestureAction.VOICE, "", rememberVectorPainter(Icons.Filled.Mic), env, modifier,
+        )
+        else -> FileLogger.w("XimeKeyboard", "功能键 id \"$id\" 没有对应组件，该键不会显示：请改用受支持的 id")
     }
+}
+
+/**
+ * 面板 / 语音类功能键（`symbol` / `emoji` / `voice`）。
+ *
+ * 默认动作分别是切换符号面板、打开表情面板（`switch_route: emoji`）、进入语音输入；
+ * 可用 `keys.<id>.tap` 覆盖动作（`action: null` 视为沿用默认）与图标（`icon: "@mic"` 等）。
+ */
+@Composable
+private fun PanelActionCell(
+    id: String,
+    defaultAction: GestureAction,
+    defaultValue: String,
+    defaultIcon: Painter,
+    env: QwertyRowEnv,
+    modifier: Modifier,
+) {
+    val tap = KeysConfigHelper.getKeyGesture(id, env.isAsciiMode)?.tap
+    val action = tap?.action ?: defaultAction
+    val value = tap?.value?.takeIf { it.isNotEmpty() } ?: defaultValue
+    val icon = tap?.icon?.takeIf { it.isNotEmpty() }?.let { panelKeyIcon(it) } ?: defaultIcon
+    IconKeyButton(
+        icon = icon,
+        onClick = {
+            invokeKeyAction(
+                KeyAction(action = action, value = value),
+                env.onKeyPress, env.onCommitText, env.onGestureAction,
+            )
+        },
+        backgroundColor = env.specialKeyBackgroundColor,
+        iconColor = env.specialKeyTextColor,
+        modifier = modifier,
+        a11yDescription = when (id) {
+            "symbol" -> "符号"
+            "emoji" -> "表情"
+            else -> "语音输入"
+        },
+        onPress = { env.onKeyPressDown?.invoke(value) },
+        onRelease = { env.onKeyRelease?.invoke(value) },
+        shadowEnabled = env.shadowEnabled,
+        shadowElevation = env.shadowElevation,
+        shadowShapeRadius = env.shadowShapeRadius,
+    )
+}
+
+/** 功能键图标名 → 内置图标（与 `label: "@xxx"` 的图标名约定一致）。 */
+@Composable
+private fun panelKeyIcon(name: String): Painter? = when (name) {
+    "language", "globe" -> rememberVectorPainter(Icons.Filled.Language)
+    "emoji", "mood", "emoji_emotions" -> rememberVectorPainter(Icons.Filled.EmojiEmotions)
+    "mic", "voice" -> rememberVectorPainter(Icons.Filled.Mic)
+    "symbol", "symbols", "keyboard" -> rememberVectorPainter(Icons.TwoTone.KeyboardAlt)
+    else -> null
 }
 
 @Composable
@@ -780,7 +896,7 @@ private fun DeleteCell(env: QwertyRowEnv, modifier: Modifier) {
     val delBinding = KeysConfigHelper.getKeyGesture("delete", env.isAsciiMode)
     val delTap = delBinding?.tap ?: KeyAction(GestureAction.DELETE)
     val delLong = delBinding?.longPress?.values?.firstOrNull()
-        ?: KeyAction(GestureAction.DELETE, repeat = true)
+        ?: KeyAction(GestureAction.DELETE)
     val delUp = delBinding?.swipeUp ?: KeyAction(GestureAction.CLEAR_ALL, label = "上滑清空")
     val delDown = delBinding?.swipeDown ?: KeyAction(GestureAction.UNDO_CLEAR, label = "下滑撤回")
     val delLeft = delBinding?.swipeLeft ?: KeyAction(GestureAction.COMMAND, "clear_composition")
@@ -791,6 +907,7 @@ private fun DeleteCell(env: QwertyRowEnv, modifier: Modifier) {
         backgroundColor = env.specialKeyBackgroundColor,
         iconColor = env.specialKeyTextColor,
         modifier = modifier,
+        a11yDescription = "退格",
         swipeText = delRight.label.ifEmpty { "清空" },
         onSwipe = { invokeKeyAction(delRight, env.onKeyPress, env.onCommitText, env.onGestureAction) },
         onLongClick = { invokeKeyAction(delLong, env.onKeyPress, env.onCommitText, env.onGestureAction) },
@@ -818,6 +935,8 @@ private fun ModeChangeCell(env: QwertyRowEnv, modifier: Modifier) {
         ?: listOf("number", "common_symbol")
     SwipeableKeyButton(
         text = mcTap?.label?.takeIf { it.isNotEmpty() } ?: "?123",
+        // tap.bubble: false → 不弹按压气泡（默认 true，行为与改动前一致）
+        pressText = (mcTap?.label?.takeIf { it.isNotEmpty() } ?: "?123").takeIf { mcTap?.bubble ?: true },
         onClick = {
             if (mcTap != null) invokeKeyAction(mcTap, env.onKeyPress, env.onCommitText, env.onGestureAction)
             else env.onKeyPress("mode_change")
@@ -877,10 +996,10 @@ private fun CommaCell(env: QwertyRowEnv, modifier: Modifier) {
     val k2LongPressConfig = k2KeyGesture?.longPress
     val k2LongPressDisplay = k2LongPressConfig?.display ?: DisplayMode.KEY
     val k2LongPressLabels = if (k2LongPressDisplay == DisplayMode.BUBBLE) {
-        k2LongPressConfig?.values?.map { it.label }?.filter { it.isNotEmpty() }?.ifEmpty { null }
+        k2LongPressConfig?.let { KeysConfigHelper.longPressDisplayItems(it) }?.ifEmpty { null }
     } else null
     val k2LongPressGestureMap = if (k2LongPressDisplay == DisplayMode.BUBBLE) {
-        k2LongPressConfig?.values?.associateBy { it.label }
+        k2LongPressConfig?.let { KeysConfigHelper.longPressActionMap(it) }
     } else null
     val k2OnClick: () -> Unit = remember(k2TapAction, k2TapValue, env.onKeyPress, env.onGestureAction) {
         {
@@ -891,14 +1010,16 @@ private fun CommaCell(env: QwertyRowEnv, modifier: Modifier) {
             }
         }
     }
-    val k2OnSwipeDown: ((String) -> Unit)? = if (k2SwipeDownAction != null && k2SwipeDownLabel != null) {
+    val k2OnSwipeDown: ((String) -> Unit)? = if (k2SwipeDownAction != null) {
         remember(k2SwipeDownAction, k2SwipeDownValue, k2SwipeDownLabel, env.onKeyPress, env.onGestureAction, env.onCommitText) {
-            val label = k2SwipeDownLabel
+            // 与字母区一致：下滑只写 action（无 label）也能触发；值取 value、其次 label；
+            // action:none 同样生成处理器以「吸收」下滑，避免竖向拖拽被判成点击而打出字符。
             { _: String ->
+                val text = k2SwipeDownValue?.takeIf { it.isNotEmpty() } ?: k2SwipeDownLabel.orEmpty()
                 if (k2SwipeDownAction == GestureAction.COMMIT) {
-                    (env.onCommitText ?: env.onKeyPress)(k2SwipeDownValue?.ifEmpty { label } ?: label)
+                    (env.onCommitText ?: env.onKeyPress)(text)
                 } else {
-                    env.onGestureAction?.invoke(k2SwipeDownAction, k2SwipeDownValue?.ifEmpty { label } ?: label)
+                    env.onGestureAction?.invoke(k2SwipeDownAction, text)
                 }
                 Unit
             }
@@ -906,13 +1027,8 @@ private fun CommaCell(env: QwertyRowEnv, modifier: Modifier) {
     } else null
     val k2OnLongPressSelect: ((String) -> Unit)? = remember(k2LongPressGestureMap, env.onGestureAction, env.onCommitText, env.onKeyPress) {
         { selectedLabel: String ->
-            val gesture = k2LongPressGestureMap?.get(selectedLabel)
-            if (gesture != null && gesture.action != GestureAction.COMMIT) {
-                env.onGestureAction?.invoke(gesture.action!!, gesture.value.ifEmpty { selectedLabel })
-            } else {
-                (env.onCommitText ?: env.onKeyPress)(selectedLabel)
-            }
-            Unit
+            dispatchLongPressSelection(
+                selectedLabel, k2LongPressGestureMap, env.onKeyPress, env.onCommitText, env.onGestureAction)
         }
     }
     if (k2TapAction == GestureAction.TOGGLE_ASCII) {
@@ -922,6 +1038,8 @@ private fun CommaCell(env: QwertyRowEnv, modifier: Modifier) {
             backgroundColor = env.keyBackgroundColor,
             iconColor = env.keyTextColor,
             modifier = modifier,
+            a11yDescription = "中英切换",
+            a11yState = if (env.isAsciiMode) "当前英文" else "当前中文",
             onPress = { env.onKeyPressDown?.invoke(k2TapValue) },
             onRelease = { env.onKeyRelease?.invoke(k2TapValue) },
             shadowEnabled = env.shadowEnabled,
@@ -932,6 +1050,8 @@ private fun CommaCell(env: QwertyRowEnv, modifier: Modifier) {
         SwipeableKeyButton(
             layoutMode = KeysConfigHelper.getButtonLayout(env.isAsciiMode),
             text = k2TapLabel,
+            // tap.bubble: false → 不弹按压气泡（默认 true，行为与改动前一致）
+            pressText = k2TapLabel.takeIf { k2KeyGesture?.tap?.bubble ?: true },
             onClick = k2OnClick,
             backgroundColor = env.keyBackgroundColor,
             textColor = env.keyTextColor,
@@ -990,10 +1110,10 @@ private fun EarthCell(env: QwertyRowEnv, modifier: Modifier) {
     val k4LongPressConfig = k4KeyGesture?.longPress
     val k4LongPressDisplay = k4LongPressConfig?.display ?: DisplayMode.KEY
     val k4LongPressLabels = if (k4LongPressDisplay == DisplayMode.BUBBLE) {
-        k4LongPressConfig?.values?.map { it.label }?.filter { it.isNotEmpty() }?.ifEmpty { null }
+        k4LongPressConfig?.let { KeysConfigHelper.longPressDisplayItems(it) }?.ifEmpty { null }
     } else null
     val k4LongPressGestureMap = if (k4LongPressDisplay == DisplayMode.BUBBLE) {
-        k4LongPressConfig?.values?.associateBy { it.label }
+        k4LongPressConfig?.let { KeysConfigHelper.longPressActionMap(it) }
     } else null
     val k4OnClick: () -> Unit = remember(k4TapAction, k4TapValue, env.onKeyPress, env.onGestureAction) {
         {
@@ -1007,14 +1127,16 @@ private fun EarthCell(env: QwertyRowEnv, modifier: Modifier) {
     val k4OnSwipe: ((String) -> Unit)? = if (k4SwipeUpValue != null && k4SwipeUpAction != GestureAction.NONE) {
         remember(k4SwipeUpValue, env.onKeyPress) { { env.onKeyPress(k4SwipeUpValue) } }
     } else null
-    val k4OnSwipeDown: ((String) -> Unit)? = if (k4SwipeDownAction != null && k4SwipeDownLabel != null) {
+    val k4OnSwipeDown: ((String) -> Unit)? = if (k4SwipeDownAction != null) {
         remember(k4SwipeDownAction, k4SwipeDownValue, k4SwipeDownLabel, env.onKeyPress, env.onGestureAction, env.onCommitText) {
-            val label = k4SwipeDownLabel
+            // 与字母区一致：下滑只写 action（无 label）也能触发；值取 value、其次 label；
+            // action:none 同样生成处理器以「吸收」下滑，避免竖向拖拽被判成点击而打出字符。
             { _: String ->
+                val text = k4SwipeDownValue?.takeIf { it.isNotEmpty() } ?: k4SwipeDownLabel.orEmpty()
                 if (k4SwipeDownAction == GestureAction.COMMIT) {
-                    (env.onCommitText ?: env.onKeyPress)(k4SwipeDownValue?.ifEmpty { label } ?: label)
+                    (env.onCommitText ?: env.onKeyPress)(text)
                 } else {
-                    env.onGestureAction?.invoke(k4SwipeDownAction, k4SwipeDownValue?.ifEmpty { label } ?: label)
+                    env.onGestureAction?.invoke(k4SwipeDownAction, text)
                 }
                 Unit
             }
@@ -1022,13 +1144,8 @@ private fun EarthCell(env: QwertyRowEnv, modifier: Modifier) {
     } else null
     val k4OnLongPressSelect: ((String) -> Unit)? = remember(k4LongPressGestureMap, env.onGestureAction, env.onCommitText, env.onKeyPress) {
         { selectedLabel: String ->
-            val gesture = k4LongPressGestureMap?.get(selectedLabel)
-            if (gesture != null && gesture.action != GestureAction.COMMIT) {
-                env.onGestureAction?.invoke(gesture.action!!, gesture.value.ifEmpty { selectedLabel })
-            } else {
-                (env.onCommitText ?: env.onKeyPress)(selectedLabel)
-            }
-            Unit
+            dispatchLongPressSelection(
+                selectedLabel, k4LongPressGestureMap, env.onKeyPress, env.onCommitText, env.onGestureAction)
         }
     }
     if ((k4TapAction == GestureAction.TOGGLE_ASCII && k4Icon != null || isEarthDefaultTap) && k4LongPressLabels == null) {
@@ -1038,6 +1155,8 @@ private fun EarthCell(env: QwertyRowEnv, modifier: Modifier) {
             backgroundColor = env.keyBackgroundColor,
             iconColor = env.keyTextColor,
             modifier = modifier,
+            a11yDescription = "中英切换",
+            a11yState = if (env.isAsciiMode) "当前英文" else "当前中文",
             onPress = { env.onKeyPressDown?.invoke(k4TapValue) },
             onRelease = { env.onKeyRelease?.invoke(k4TapValue) },
             shadowEnabled = env.shadowEnabled,
@@ -1048,6 +1167,8 @@ private fun EarthCell(env: QwertyRowEnv, modifier: Modifier) {
         SwipeableKeyButton(
             layoutMode = KeysConfigHelper.getButtonLayout(env.isAsciiMode),
             text = k4TapLabel,
+            // tap.bubble: false → 不弹按压气泡（默认 true，行为与改动前一致）
+            pressText = k4TapLabel.takeIf { k4KeyGesture?.tap?.bubble ?: true },
             onClick = k4OnClick,
             backgroundColor = env.keyBackgroundColor,
             textColor = env.keyTextColor,
@@ -1180,8 +1301,6 @@ fun KeyboardRowWithConfig(
     onSwipeStateChange: ((SwipeState, Rect) -> Unit)? = null,
     onKeyPressDown: ((String) -> Unit)? = null,
     onKeyRelease: ((String) -> Unit)? = null,
-    swipeDownHintsEnabled: Boolean = true,
-    swipeUpHintsEnabled: Boolean = true,
     onCommitText: ((String) -> Unit)? = null,
     onGestureAction: ((GestureAction, String) -> Unit)? = null,
     configVersion: Int = 0,
@@ -1198,10 +1317,8 @@ fun KeyboardRowWithConfig(
             val swipeUpDisplay = KeysConfigHelper.getSwipeUpDisplay(key, isAsciiMode)
             val swipeUpBubble = KeysConfigHelper.getSwipeUpBubble(key, isAsciiMode)
             // 键面提示位置由 display 决定（BUBBLE 用空串压制回退）；运行时气泡由 bubble 决定
-            val swipeUpKeyLabel = if (swipeUpHintsEnabled) {
-                if (swipeUpDisplay == DisplayMode.BUBBLE) "" else rawSwipeUpLabel
-            } else null
-            val swipeUpText = if (swipeUpHintsEnabled && swipeUpBubble) rawSwipeUpLabel else null
+            val swipeUpKeyLabel = if (swipeUpDisplay == DisplayMode.BUBBLE) "" else rawSwipeUpLabel
+            val swipeUpText = if (swipeUpBubble) rawSwipeUpLabel else null
             val swipeUpCommitValue = KeysConfigHelper.getSwipeUpCommitValue(key, isAsciiMode)
             val swipeDownRaw = KeysConfigHelper.getKeyGesture(key, isAsciiMode)?.swipeDown
             val swipeDownLabel = swipeDownRaw?.label?.takeIf { it.isNotEmpty() }
@@ -1209,20 +1326,18 @@ fun KeyboardRowWithConfig(
             val swipeDownValue = swipeDownRaw?.value
             val swipeDownDisplay = swipeDownRaw?.display ?: DisplayMode.BOTH
             val swipeDownBubble = swipeDownRaw?.bubble ?: true
-            val swipeDownKeyLabel = if (swipeDownHintsEnabled) {
-                if (swipeDownDisplay == DisplayMode.BUBBLE) "" else swipeDownLabel
-            } else null
-            val swipeDownText = if (swipeDownHintsEnabled && swipeDownBubble) swipeDownLabel else null
+            val swipeDownKeyLabel = if (swipeDownDisplay == DisplayMode.BUBBLE) "" else swipeDownLabel
+            val swipeDownText = if (swipeDownBubble) swipeDownLabel else null
 
             // 长按选项
             val longPressConfig = KeysConfigHelper.getKeyGesture(key, isAsciiMode)?.longPress
             val longPressDisplay = longPressConfig?.display ?: DisplayMode.KEY
             val longPressLabels = if (longPressDisplay == DisplayMode.BUBBLE) {
-                longPressConfig?.values?.map { it.label }?.filter { it.isNotEmpty() }
+                longPressConfig?.let { KeysConfigHelper.longPressDisplayItems(it) }
                     ?.ifEmpty { null }
             } else null
             val longPressGestureMap = if (longPressDisplay == DisplayMode.BUBBLE) {
-                longPressConfig?.values?.associateBy { it.label }
+                longPressConfig?.let { KeysConfigHelper.longPressActionMap(it) }
             } else null
 
             // 键帽显示文本
@@ -1238,7 +1353,21 @@ fun KeyboardRowWithConfig(
                 KeysConfigHelper.getKeyDisplayLabel(key, isAsciiMode)
             }
 
-            val onClick = remember(key, commitValue, onKeyPress) { { onKeyPress(commitValue) } }
+            // tap 动作接线：非 COMMIT/SEND_RIME 的动作（复制/粘贴/面板切换等）走手势分发，
+            // 其余沿用原有上屏路径（shift 大写与输入法组合语义不变）
+            val tapAction = KeysConfigHelper.getKeyGesture(key, isAsciiMode)?.tap
+            val onClick: () -> Unit = remember(key, commitValue, tapAction, onKeyPress, onCommitText, onGestureAction) {
+                { dispatchKeyActionOrPress(tapAction, commitValue, onKeyPress, onCommitText, onGestureAction) }
+            }
+            // 上滑动作接线（action: none 视为未绑定；COMMIT/未配置沿用旧上滑上屏）
+            val onSwipeUp: ((String) -> Unit)? = remember(
+                key, swipeUpAction, swipeUpCommitValue, onKeyPress, onCommitText, onGestureAction
+            ) {
+                swipeUpHandlerFor(
+                    KeysConfigHelper.getKeyGesture(key, isAsciiMode)?.swipeUp,
+                    swipeUpCommitValue, onKeyPress, onCommitText, onGestureAction,
+                )
+            }
             val onPress: (() -> Unit)? = remember(key, onKeyPressDown) { { onKeyPressDown?.invoke(key); Unit } }
             val onRelease: (() -> Unit)? = remember(key, onKeyRelease) { { onKeyRelease?.invoke(key); Unit } }
             // 左/右滑：命中即执行动作（并在按钮内自动抑制父层光标手势）
@@ -1262,36 +1391,33 @@ fun KeyboardRowWithConfig(
                         }
                     }
                 }
-            val onSwipeDown: ((String) -> Unit)? = if (swipeDownAction != null && swipeDownHintsEnabled && swipeDownLabel != null) {
+            // 下滑手势与提示文本解耦：只写 action（无 label）也能触发。
+            // 注意 action:none 也要生成处理器：它由动作分发空实现「吸收」下滑，
+            // 否则竖向拖拽会走落点点击判定（shouldClick 只看横向位移）而误打出一个字母。
+            // 传给动作的值优先 value、其次 label，都没有时为空串（仅对无需值的动作有意义）。
+            val onSwipeDown: ((String) -> Unit)? = if (swipeDownAction != null) {
                 remember(key, onKeyPress, onGestureAction, onCommitText, swipeDownAction, swipeDownValue, swipeDownLabel) {
-                    val label = swipeDownLabel
                     { _: String ->
+                        val text = swipeDownValue?.takeIf { it.isNotEmpty() } ?: swipeDownLabel.orEmpty()
                         if (swipeDownAction == GestureAction.COMMIT) {
-                            (onCommitText ?: onKeyPress)(swipeDownValue?.ifEmpty { label } ?: label)
+                            (onCommitText ?: onKeyPress)(text)
                         } else {
-                            onGestureAction?.invoke(
-                                swipeDownAction,
-                                swipeDownValue?.ifEmpty { label } ?: label)
+                            onGestureAction?.invoke(swipeDownAction, text)
                         }
                         Unit
                     }
                 }
             } else null
             val onLongPressSelect: ((String) -> Unit)? = remember(key, longPressGestureMap, onGestureAction, onCommitText, onKeyPress) { { selectedLabel: String ->
-                val gesture = longPressGestureMap?.get(selectedLabel)
-                if (gesture != null && gesture.action != GestureAction.COMMIT) {
-                    onGestureAction?.invoke(
-                        gesture.action!!,
-                        gesture.value.ifEmpty { selectedLabel })
-                } else {
-                    (onCommitText ?: onKeyPress)(selectedLabel)
-                }
-                Unit
+                dispatchLongPressSelection(
+                    selectedLabel, longPressGestureMap, onKeyPress, onCommitText, onGestureAction)
             } }
 
             SwipeableKeyButton(
                 layoutMode = KeysConfigHelper.getButtonLayout(isAsciiMode),
                 text = displayText,
+                // tap.bubble: false → 不弹按压气泡（默认 true，行为与改动前一致）
+                pressText = displayText.takeIf { tapAction?.bubble ?: true },
                 onClick = onClick,
                 backgroundColor = config.keyBackgroundColor,
                 textColor = config.keyTextColor,
@@ -1300,7 +1426,7 @@ fun KeyboardRowWithConfig(
                 swipeDownText = swipeDownText,
                 swipeUpKeyLabel = swipeUpKeyLabel,
                 swipeDownKeyLabel = swipeDownKeyLabel,
-                onSwipe = if (swipeUpCommitValue != null && swipeUpAction != GestureAction.NONE) { { onKeyPress(swipeUpCommitValue) } } else null,
+                onSwipe = onSwipeUp,
                 onSwipeDown = onSwipeDown,
                 onSwipeLeft = onSwipeLeft,
                 onSwipeRight = onSwipeRight,
@@ -1409,7 +1535,17 @@ private fun ShiftCapsKeyButton(
                 else if (shiftMode == ShiftMode.CAPS) darkenColor(backgroundColor, 0.2f)
                 else if (shiftMode == ShiftMode.SINGLE) darkenColor(backgroundColor, 0.1f)
                 else backgroundColor
-            ),
+            )
+            .keySemantics(
+                "大小写切换",
+                when (shiftMode) {
+                    ShiftMode.CAPS -> "大写锁定"
+                    ShiftMode.SINGLE -> "大写"
+                    ShiftMode.OFF -> "小写"
+                },
+            ) {
+                if (currentOnTap != null) currentOnTap?.invoke() else onKeyPress("shift_single")
+            },
         contentAlignment = Alignment.Center
     ) {
         val painter = when (shiftMode) {
@@ -1459,8 +1595,6 @@ private fun LandscapeKeyboardContent(
     viewModel: KeyboardViewModel,
     callbacks: KeyboardCallbacks,
     uiState: KeyboardUiState,
-    swipeUpHintsEnabled: Boolean,
-    swipeDownHintsEnabled: Boolean,
     isAsciiMode: Boolean,
     keyRows: List<List<String>>,
     configVersion: Int = 0,
@@ -1506,8 +1640,9 @@ private fun LandscapeKeyboardContent(
         ?: if (uiState.isDarkTheme) longToColor(kbColors.keyTextColorDark) else longToColor(kbColors.keyTextColor)
     val specialKeyBackgroundColor = if (uiState.isDarkTheme) kbColors.specialKeyBgColorDark?.let { longToColor(it) }
         ?: themeSpecialKeyColor else kbColors.specialKeyBgColor?.let { longToColor(it) } ?: themeSpecialKeyColor
-    val specialKeyTextColor = if (uiState.isDarkTheme) Color.White
-        else KeyboardThemes.getSpecialKeyTextColor(uiState.themeId, false)
+    val specialKeyTextColor = KeyboardThemes.getSpecialKeyTextColorForBackground(
+        specialKeyBackgroundColor, keyTextColor
+    )
     val bubbleBgColor = if (uiState.isDarkTheme) themeScheme.specialKeyDark
         else themeScheme.specialKeyLight
     val kbShadow = KeysConfigHelper.getKeyboardShadow()
@@ -1525,14 +1660,8 @@ private fun LandscapeKeyboardContent(
     val onCommitText = callbacks.onCommitText
     val onGestureAction: (GestureAction, String) -> Unit = { action, value ->
         when (action) {
-            GestureAction.SWITCH_ROUTE -> {
-                val overlayRoute = when (value) {
-                    "emoji" -> OverlayRoute.Emoji
-                    "symbol" -> OverlayRoute.Symbol
-                    else -> null
-                }
-                overlayRoute?.let { viewModel.showOverlay(it) }
-            }
+            // 面板切换映射的唯一实现（三处 UI 手势入口共用，含 clipboard）
+            GestureAction.SWITCH_ROUTE -> switchRouteOverlay(value)?.let { viewModel.showOverlay(it) }
             GestureAction.TOGGLE_ASCII -> {
                 viewModel.resetShift()
                 callbacks.onKeyPress("ime_switch", uiState.isAsciiMode)
@@ -1568,8 +1697,6 @@ private fun LandscapeKeyboardContent(
         enterKeyText = enterKeyText,
         suppressCursorMove = suppressCursorMove,
         processSwipeState = { state, bounds -> onSwipeStateChange?.invoke(state, bounds) },
-        swipeUpHintsEnabled = swipeUpHintsEnabled,
-        swipeDownHintsEnabled = swipeDownHintsEnabled,
         configVersion = configVersion,
         landscape = compactStyle,
         fontSize = landscapeFontSize,
@@ -1635,6 +1762,8 @@ fun SwipeableKeyButtonLandscape(
     backgroundColor: Color,
     textColor: Color,
     modifier: Modifier = Modifier,
+    /** 按下键帽气泡文本；null = 不弹按压气泡（键配置 `tap.bubble: false`）。缺省跟随键面文本。 */
+    pressText: String? = text,
     swipeText: String? = null,
     swipeDownText: String? = null,
     swipeUpKeyLabel: String? = null,
@@ -1680,6 +1809,7 @@ fun SwipeableKeyButtonLandscape(
     val currentOnLongPressSelect by rememberUpdatedState(onLongPressSelect)
     val currentLongPressItems by rememberUpdatedState(longPressItems)
     val currentOnSwipeStateChange by rememberUpdatedState(onSwipeStateChange)
+    val currentPressText by rememberUpdatedState(pressText)
     val scope = rememberCoroutineScope()
     val view = LocalView.current
     val keyLabelFontFamily = AppFonts.keyLabelFontFamily
@@ -1732,7 +1862,7 @@ fun SwipeableKeyButtonLandscape(
                     detectTapGestures(
                         onPress = {
                             isPressed = true
-                            currentOnSwipeStateChange?.invoke(SwipeState(isPressed = true, pressedText = currentText), buttonBounds)
+                            currentOnSwipeStateChange?.invoke(SwipeState(isPressed = true, pressedText = currentPressText), buttonBounds)
                             currentOnPress?.invoke()
                             tryAwaitRelease()
                             isPressed = false
@@ -1752,7 +1882,7 @@ fun SwipeableKeyButtonLandscape(
                         val downX = down.position.x
                         val items = currentLongPressItems ?: return@awaitEachGesture
 
-                        currentOnSwipeStateChange?.invoke(SwipeState(isPressed = true, pressedText = currentText), buttonBounds)
+                        currentOnSwipeStateChange?.invoke(SwipeState(isPressed = true, pressedText = currentPressText), buttonBounds)
                         currentOnPress?.invoke()
 
                         val longPressJob = scope.launch {
@@ -1855,7 +1985,7 @@ fun SwipeableKeyButtonLandscape(
                                 hasTriggeredSwipeRight = false
                                 isSwiping = false
                                 isSwipeDown = false
-                                currentOnSwipeStateChange?.invoke(SwipeState(isPressed = true, pressedText = currentText), buttonBounds)
+                                currentOnSwipeStateChange?.invoke(SwipeState(isPressed = true, pressedText = currentPressText), buttonBounds)
                             },
                             onDragEnd = {
                                 if (!hasTriggeredSwipeUp && !hasTriggeredSwipeDown &&
@@ -2036,8 +2166,6 @@ fun CompactKeyboardRowWithConfig(
     modifier: Modifier = Modifier,
     onKeyPressDown: ((String) -> Unit)? = null,
     onKeyRelease: ((String) -> Unit)? = null,
-    swipeDownHintsEnabled: Boolean = true,
-    swipeUpHintsEnabled: Boolean = true,
     onCommitText: ((String) -> Unit)? = null,
     onGestureAction: ((GestureAction, String) -> Unit)? = null,
     onSwipeStateChange: ((SwipeState, Rect) -> Unit)? = null,
@@ -2055,10 +2183,8 @@ fun CompactKeyboardRowWithConfig(
             val swipeUpDisplay = KeysConfigHelper.getSwipeUpDisplay(key, isAsciiMode)
             val swipeUpBubble = KeysConfigHelper.getSwipeUpBubble(key, isAsciiMode)
             // 键面提示位置由 display 决定（BUBBLE 用空串压制回退）；运行时气泡由 bubble 决定
-            val swipeUpKeyLabel = if (swipeUpHintsEnabled) {
-                if (swipeUpDisplay == DisplayMode.BUBBLE) "" else rawSwipeUpLabel
-            } else null
-            val swipeUpText = if (swipeUpHintsEnabled && swipeUpBubble) rawSwipeUpLabel else null
+            val swipeUpKeyLabel = if (swipeUpDisplay == DisplayMode.BUBBLE) "" else rawSwipeUpLabel
+            val swipeUpText = if (swipeUpBubble) rawSwipeUpLabel else null
             val swipeUpCommitValue = KeysConfigHelper.getSwipeUpCommitValue(key, isAsciiMode)
             val swipeDownRaw = KeysConfigHelper.getKeyGesture(key, isAsciiMode)?.swipeDown
             val swipeDownLabel = swipeDownRaw?.label?.takeIf { it.isNotEmpty() }
@@ -2066,19 +2192,17 @@ fun CompactKeyboardRowWithConfig(
             val swipeDownValue = swipeDownRaw?.value
             val swipeDownDisplay = swipeDownRaw?.display ?: DisplayMode.BOTH
             val swipeDownBubble = swipeDownRaw?.bubble ?: true
-            val swipeDownKeyLabel = if (swipeDownHintsEnabled) {
-                if (swipeDownDisplay == DisplayMode.BUBBLE) "" else swipeDownLabel
-            } else null
-            val swipeDownText = if (swipeDownHintsEnabled && swipeDownBubble) swipeDownLabel else null
+            val swipeDownKeyLabel = if (swipeDownDisplay == DisplayMode.BUBBLE) "" else swipeDownLabel
+            val swipeDownText = if (swipeDownBubble) swipeDownLabel else null
 
             val longPressConfig = KeysConfigHelper.getKeyGesture(key, isAsciiMode)?.longPress
             val longPressDisplay = longPressConfig?.display ?: DisplayMode.KEY
             val longPressLabels = if (longPressDisplay == DisplayMode.BUBBLE) {
-                longPressConfig?.values?.map { it.label }?.filter { it.isNotEmpty() }
+                longPressConfig?.let { KeysConfigHelper.longPressDisplayItems(it) }
                     ?.ifEmpty { null }
             } else null
             val longPressGestureMap = if (longPressDisplay == DisplayMode.BUBBLE) {
-                longPressConfig?.values?.associateBy { it.label }
+                longPressConfig?.let { KeysConfigHelper.longPressActionMap(it) }
             } else null
 
             val rawCommitValue = KeysConfigHelper.getKeyCommitValue(key, isAsciiMode)
@@ -2088,7 +2212,20 @@ fun CompactKeyboardRowWithConfig(
                 rawCommitValue
             }
             val compactDisplayText = if (isAsciiMode) commitValue else KeysConfigHelper.getKeyDisplayLabel(key, isAsciiMode)
-            val compactOnClick = remember(key, commitValue, onKeyPress) { { onKeyPress(commitValue) } }
+            // tap 动作接线：非 COMMIT/SEND_RIME 的动作走手势分发，其余沿用原有上屏路径
+            val compactTapAction = KeysConfigHelper.getKeyGesture(key, isAsciiMode)?.tap
+            val compactOnClick: () -> Unit = remember(key, commitValue, compactTapAction, onKeyPress, onCommitText, onGestureAction) {
+                { dispatchKeyActionOrPress(compactTapAction, commitValue, onKeyPress, onCommitText, onGestureAction) }
+            }
+            // 上滑动作接线（action: none 视为未绑定；COMMIT/未配置沿用旧上滑上屏）
+            val compactOnSwipeUp: ((String) -> Unit)? = remember(
+                key, swipeUpAction, swipeUpCommitValue, onKeyPress, onCommitText, onGestureAction
+            ) {
+                swipeUpHandlerFor(
+                    KeysConfigHelper.getKeyGesture(key, isAsciiMode)?.swipeUp,
+                    swipeUpCommitValue, onKeyPress, onCommitText, onGestureAction,
+                )
+            }
             val compactOnPress: (() -> Unit)? = remember(key, onKeyPressDown) { { onKeyPressDown?.invoke(key); Unit } }
             val compactOnRelease: (() -> Unit)? = remember(key, onKeyRelease) { { onKeyRelease?.invoke(key); Unit } }
             // 左/右滑：命中即执行动作（并在按钮内自动抑制父层光标手势）
@@ -2112,35 +2249,29 @@ fun CompactKeyboardRowWithConfig(
                         }
                     }
                 }
-            val compactOnSwipeDown: ((String) -> Unit)? = if (swipeDownAction != null && swipeDownHintsEnabled && swipeDownLabel != null) {
+            // 下滑手势与提示文本解耦（横屏紧凑行同标准行语义；action:none 同样需生成处理器以吸收下滑）
+            val compactOnSwipeDown: ((String) -> Unit)? = if (swipeDownAction != null) {
                 remember(key, onKeyPress, onGestureAction, onCommitText, swipeDownAction, swipeDownValue, swipeDownLabel) {
-                    val label = swipeDownLabel
                     { _: String ->
+                        val text = swipeDownValue?.takeIf { it.isNotEmpty() } ?: swipeDownLabel.orEmpty()
                         if (swipeDownAction == GestureAction.COMMIT) {
-                            (onCommitText ?: onKeyPress)(swipeDownValue?.ifEmpty { label } ?: label)
+                            (onCommitText ?: onKeyPress)(text)
                         } else {
-                            onGestureAction?.invoke(
-                                swipeDownAction,
-                                swipeDownValue?.ifEmpty { label } ?: label!!)
+                            onGestureAction?.invoke(swipeDownAction, text)
                         }
                         Unit
                     }
                 }
             } else null
             val compactOnLongPressSelect: ((String) -> Unit)? = remember(key, longPressGestureMap, onGestureAction, onCommitText, onKeyPress) { { selectedLabel: String ->
-                val gesture = longPressGestureMap?.get(selectedLabel)
-                if (gesture != null && gesture.action != GestureAction.COMMIT) {
-                    onGestureAction?.invoke(
-                        gesture.action!!,
-                        gesture.value.ifEmpty { selectedLabel })
-                } else {
-                    (onCommitText ?: onKeyPress)(selectedLabel)
-                }
-                Unit
+                dispatchLongPressSelection(
+                    selectedLabel, longPressGestureMap, onKeyPress, onCommitText, onGestureAction)
             } }
 
             SwipeableKeyButtonLandscape(
                 text = compactDisplayText,
+                // tap.bubble: false → 不弹按压气泡（默认 true，行为与改动前一致）
+                pressText = compactDisplayText.takeIf { compactTapAction?.bubble ?: true },
                 onClick = compactOnClick,
                 backgroundColor = config.keyBackgroundColor,
                 textColor = config.keyTextColor,
@@ -2149,7 +2280,7 @@ fun CompactKeyboardRowWithConfig(
                 swipeDownText = swipeDownText,
                 swipeUpKeyLabel = swipeUpKeyLabel,
                 swipeDownKeyLabel = swipeDownKeyLabel,
-                onSwipe = if (swipeUpCommitValue != null && swipeUpAction != GestureAction.NONE) { { onKeyPress(swipeUpCommitValue) } } else null,
+                onSwipe = compactOnSwipeUp,
                 onSwipeDown = compactOnSwipeDown,
                 onSwipeLeft = compactOnSwipeLeft,
                 onSwipeRight = compactOnSwipeRight,
@@ -2272,7 +2403,17 @@ private fun SpaceKey(
             .fillMaxHeight()
             .then(shadowModifier)
             .clip(RoundedCornerShape(LocalKeyCornerRadius.current))
-            .background(keyBackgroundColor),
+            .background(keyBackgroundColor)
+            .keySemantics(
+                when {
+                    voiceSticky -> "轻触结束语音"
+                    isVoiceMode -> "语音输入"
+                    else -> "空格"
+                },
+                null,
+            ) {
+                if (currentOnTap != null) currentOnTap?.invoke() else currentOnKeyPress("space")
+            },
         contentAlignment = Alignment.Center
     ) {
         when {

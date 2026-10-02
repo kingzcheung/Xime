@@ -37,6 +37,8 @@ class JsAsrPluginTest {
     private class MockWsHostApi : WsHostApi {
         val sentTexts = mutableListOf<String>()
         val sentBinaries = mutableListOf<ByteArray>()
+        /** 文本与音频的统一发送顺序（跨类型断言用）。 */
+        val sentOrder = mutableListOf<String>()
         var connectedUrl: String? = null
         var connectedHeaders: Map<String, String> = emptyMap()
         var hostListener: WsHostListener? = null
@@ -48,8 +50,22 @@ class JsAsrPluginTest {
             hostListener = listener
             return true
         }
-        override fun sendText(message: String): Boolean { sentTexts.add(message); return true }
-        override fun sendBinary(data: ByteArray): Boolean { sentBinaries.add(data); return true }
+        override fun sendText(message: String): Boolean {
+            sentTexts.add(message)
+            sentOrder.add(
+                when {
+                    message.contains("run-task") -> "run-task"
+                    message.contains("finish-task") -> "finish-task"
+                    else -> "text"
+                }
+            )
+            return true
+        }
+        override fun sendBinary(data: ByteArray): Boolean {
+            sentBinaries.add(data)
+            sentOrder.add("audio")
+            return true
+        }
         override fun close() { closeCount++ }
         override fun getState(): Int = 2
         override fun lastError(): String? = null
@@ -176,6 +192,47 @@ class JsAsrPluginTest {
             // stop → JS 发 finish-task
             runtime.callAsync("speech.stop")
             assertTrue("stop 发送 finish-task", mock.sentTexts.any { it.contains("\"action\":\"finish-task\"") })
+        } finally {
+            runtime.close()
+        }
+    }
+
+    /**
+     * task-started 之前 stop：缓存音频不得被丢弃，finish-task 必须排在音频之后。
+     * 回归：曾经直接发 finish-task，task-started 后补发的音频排在结束指令之后（被服务端丢弃）。
+     */
+    @Test
+    fun `funasr keeps buffered audio ahead of finish-task when stopped before task-started`() {
+        val dir = writePlugin()
+        val mock = MockWsHostApi()
+        val store = InMemoryConfigStore()
+        store.set("apiKey", "test-key-123")
+        val runtime = JsScriptRuntime(
+            "com.kingzcheung.xime.plugin.funasr_asr",
+            dir, "main.js", store,
+            wsHostApi = mock,
+            injectAsr = true
+        )
+        try {
+            assertTrue("main.js 应能加载", runtime.load())
+            assertTrue("start 应成功", runtime.callAsync("speech.start") == true)
+
+            mock.hostListener?.onOpen()
+            awaitUntil { mock.sentTexts.any { it.contains("run-task") } }
+
+            // task-started 前的音频 + 立即 stop
+            runtime.callAsync("speech.feed", byteArrayOf(1, 2, 3))
+            runtime.callAsync("speech.stop")
+            assertTrue(
+                "task-started 前不应发 finish-task",
+                mock.sentTexts.none { it.contains("finish-task") }
+            )
+
+            // task-started 到达：先补发音频，再发 finish-task
+            mock.hostListener?.onMessage("""{"header":{"event":"task-started","task_id":"t1"},"payload":{}}""")
+            awaitUntil { mock.sentOrder.contains("finish-task") }
+            assertEquals("顺序应为 run-task → 音频 → finish-task", listOf("run-task", "audio", "finish-task"), mock.sentOrder)
+            assertTrue("补发的应是缓冲音频", byteArrayOf(1, 2, 3).contentEquals(mock.sentBinaries[0]))
         } finally {
             runtime.close()
         }

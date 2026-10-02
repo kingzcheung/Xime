@@ -233,6 +233,105 @@ class JsVolcAsrPluginTest {
         }
     }
 
+    /** 帧 → 标签（INIT / 音频标记 / END），用于断言发送顺序。 */
+    private fun frameTag(frame: ByteArray, markers: Map<Byte, String>): String {
+        val msgType = (frame[1].toInt() and 0xFF) shr 4
+        val flags = frame[1].toInt() and 0x0F
+        if (msgType == 0x1) return "INIT"
+        val size = readU32(frame, 8)
+        val raw = gunzip(frame.copyOfRange(12, 12 + size))
+        if (raw.isNotEmpty()) markers[raw[0]]?.let { return it }
+        return if (flags == 0x3 || readInt32(frame, 4) < 0) "END" else "?"
+    }
+
+    /**
+     * 建连期间的音频必须在 onOpen（配置包发出）后立即按录制顺序补发。
+     * 回归：曾经只在 stop 时补发，导致实时帧排到缓冲帧前面（INIT, C, A, B, END）。
+     */
+    @Test
+    fun `volc flushes buffered audio right after open in recording order`() {
+        val dir = writePlugin()
+        val mock = MockWsHostApi()
+        val store = InMemoryConfigStore()
+        store.set("apiKey", "test-api-key")
+        val runtime = JsScriptRuntime(
+            "com.kingzcheung.xime.plugin.volc_asr",
+            dir, "main.js", store,
+            wsHostApi = mock,
+            injectAsr = true
+        )
+        try {
+            assertTrue("main.js 应能加载", runtime.load())
+            assertTrue("start 应成功", runtime.callAsync("speech.start") == true)
+
+            val a = ByteArray(64) { 0xA1.toByte() }
+            val b = ByteArray(64) { 0xB2.toByte() }
+            val c = ByteArray(64) { 0xC3.toByte() }
+            val markers = mapOf(0xA1.toByte() to "A", 0xB2.toByte() to "B", 0xC3.toByte() to "C")
+
+            // 建连阶段：只缓冲，不外发
+            runtime.callAsync("speech.feed", a)
+            runtime.callAsync("speech.feed", b)
+            assertTrue("建连期间不应发送任何帧", mock.sentBinaries.isEmpty())
+
+            // 连接成功：配置包 + 立即补发 A、B（不等 stop）
+            mock.hostListener?.onOpen()
+            awaitUntil { mock.sentBinaries.size >= 3 }
+            assertEquals("onOpen 应对补发缓冲音频", 3, mock.sentBinaries.size)
+
+            runtime.callAsync("speech.feed", c)
+            runtime.callAsync("speech.stop")
+            awaitUntil { mock.sentBinaries.size >= 5 }
+            assertEquals(
+                "发送顺序应为 INIT → A → B → C → END",
+                listOf("INIT", "A", "B", "C", "END"),
+                mock.sentBinaries.map { frameTag(it, markers) }
+            )
+        } finally {
+            runtime.close()
+        }
+    }
+
+    /**
+     * onOpen 之前 stop：不得先发音频与结束包（配置包会排到后面）。
+     * 回归：曾经的顺序是 A, END, INIT。
+     */
+    @Test
+    fun `volc defers stop until open when stopped while connecting`() {
+        val dir = writePlugin()
+        val mock = MockWsHostApi()
+        val store = InMemoryConfigStore()
+        store.set("apiKey", "test-api-key")
+        val runtime = JsScriptRuntime(
+            "com.kingzcheung.xime.plugin.volc_asr",
+            dir, "main.js", store,
+            wsHostApi = mock,
+            injectAsr = true
+        )
+        try {
+            assertTrue("main.js 应能加载", runtime.load())
+            assertTrue("start 应成功", runtime.callAsync("speech.start") == true)
+
+            val a = ByteArray(64) { 0xA1.toByte() }
+            val markers = mapOf(0xA1.toByte() to "A")
+
+            runtime.callAsync("speech.feed", a)
+            runtime.callAsync("speech.stop")
+            assertTrue("建连完成前不应发送任何帧", mock.sentBinaries.isEmpty())
+
+            // 连接成功后才按 INIT → A → END 补发
+            mock.hostListener?.onOpen()
+            awaitUntil { mock.sentBinaries.size >= 3 }
+            assertEquals(
+                "发送顺序应为 INIT → A → END",
+                listOf("INIT", "A", "END"),
+                mock.sentBinaries.map { frameTag(it, markers) }
+            )
+        } finally {
+            runtime.close()
+        }
+    }
+
     private fun readU32(arr: ByteArray, offset: Int): Int =
         ((arr[offset].toInt() and 0xFF) shl 24) or
             ((arr[offset + 1].toInt() and 0xFF) shl 16) or

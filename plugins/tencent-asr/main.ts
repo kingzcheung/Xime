@@ -35,6 +35,8 @@ const DEFAULT_ENGINE = '16k_zh_en_2.0';
 let voiceId = '';
 let audioReady = false;
 let prebuffer: Uint8Array[] = [];
+// 握手（{"code":0}）到达前收到 stop：置位后由 onWsMessage 在补发缓存之后发结束通知
+let stopPending = false;
 
 function isConfigured(): boolean {
   for (const key of [KEY_APP_ID, KEY_SECRET_ID, KEY_SECRET_KEY]) {
@@ -108,6 +110,7 @@ async function start(): Promise<boolean> {
   voiceId = host.uuid();
   audioReady = false;
   prebuffer = [];
+  stopPending = false;
 
   const ts = host.crypto.epochSeconds();
   const params: Record<string, string | number> = {
@@ -177,6 +180,11 @@ async function onWsMessage(text: string): Promise<void> {
       }
     }
     prebuffer = [];
+    if (stopPending) {
+      // 握手中途已收到 stop：先补发开头音频再发结束通知，否则 end 会排在音频前面
+      stopPending = false;
+      await sendEnd();
+    }
   }
 
   const sentences = obj.sentences;
@@ -217,6 +225,7 @@ function onWsClose(): void {
   voiceId = '';
   audioReady = false;
   prebuffer = [];
+  stopPending = false;
 }
 
 // ================= 音频数据（主 App 每帧提交，JS 决策） =================
@@ -234,8 +243,8 @@ async function processAudioChunk(pcm: Uint8Array): Promise<void> {
   }
 }
 
-async function stop(): Promise<void> {
-  if (voiceId === '') return;
+/** 结束通知：服务端回 final=1 后断开。 */
+async function sendEnd(): Promise<void> {
   try {
     await host.ws.sendText('{"type":"end"}');
   } catch (e) {
@@ -243,11 +252,23 @@ async function stop(): Promise<void> {
   }
 }
 
+async function stop(): Promise<void> {
+  if (voiceId === '') return;
+  if (!audioReady && host.ws.getState() !== 3) {
+    // 握手尚未完成：此刻发 end 会排在缓冲音频之前（服务端已结束会话，音频会被丢弃），
+    // 记为待发送，由 onWsMessage 补发缓存后再发；连接已关闭时照常发送以暴露错误
+    stopPending = true;
+    return;
+  }
+  await sendEnd();
+}
+
 async function cancel(): Promise<void> {
   await host.ws.close();
   voiceId = '';
   audioReady = false;
   prebuffer = [];
+  stopPending = false;
 }
 
 const plugin = definePlugin({

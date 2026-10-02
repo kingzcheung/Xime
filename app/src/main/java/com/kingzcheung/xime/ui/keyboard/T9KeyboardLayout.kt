@@ -337,15 +337,15 @@ private fun T9KeyboardContent(
     val t9DigitFontSize = if (compactMode) 13.sp else 16.sp
     val ctrlFontSize = if (compactMode) 11.sp else androidx.compose.ui.unit.TextUnit.Unspecified
     val candidateFontSize = if (compactMode) 11.sp else 13.sp
-    val specialKeyTextColor = if (uiState.isDarkTheme) Color.White
-        else KeyboardThemes.getAccentColor(uiState.themeId, false)
+    val specialKeyTextColor = KeyboardThemes.getSpecialKeyTextColorForBackground(
+        specialKeyBackgroundColor, keyTextColor
+    )
 
     // 数字键滑动手势（keyboard.t9.keys，热重载经 configVersion 感知）：
     // 上滑默认直接上屏数字（T9 模式 onKeyPress(数字) 会进拼音数字码组合，须走 onCommitText），
-    // 下滑默认绑定快捷编辑动作。提示开关只控制提示显示；组件内上滑触发只看回调绑定，
-    // 提示关闭/横屏紧凑时手势仍可用。上滑键面提示尊重 display: bubble（仅气泡不印键面）。
+    // 下滑默认绑定快捷编辑动作。提示恒显，是否绘制由按键配置的 display/bubble 决定；
+    // 手势触发只看回调绑定，与提示无关。上滑键面提示尊重 display: bubble（仅气泡不印键面）。
     val configVersion by KeysConfigHelper.configVersion.collectAsState()
-    val swipeHints = rememberSwipeHintsEnabled()
     val hintsActive = !compactMode
     val commitDirect: (String) -> Unit =
         { text -> callbacks.onCommitText?.invoke(text) ?: onKeyPress(text) }
@@ -357,20 +357,20 @@ private fun T9KeyboardContent(
         // display 只管静态键面提示位置（bubble 不画键面，用空串压制回退）；
         // 运行时气泡由 bubble 独立控制。手势回调与二者无关。
         val swipeUpKeyLabel = when {
-            !swipeHints.up || !hintsActive -> null
+            !hintsActive -> null
             gesture.swipeUp?.display == DisplayMode.BUBBLE -> ""
             else -> upHint
         }
         val swipeDownKeyLabel = when {
-            !swipeHints.down || !hintsActive -> null
+            !hintsActive -> null
             gesture.swipeDown?.display == DisplayMode.BUBBLE -> ""
             else -> downHint
         }
         return T9KeySwipes(
             onSwipeUp = swipeHandlerFor(gesture.swipeUp, commitDirect, onGestureAction),
             onSwipeDown = swipeHandlerFor(gesture.swipeDown, commitDirect, onGestureAction),
-            swipeUpText = if (swipeHints.up && hintsActive && (gesture.swipeUp?.bubble ?: true)) upHint else null,
-            swipeDownText = if (swipeHints.down && hintsActive && (gesture.swipeDown?.bubble ?: true)) downHint else null,
+            swipeUpText = if (hintsActive && (gesture.swipeUp?.bubble ?: true)) upHint else null,
+            swipeDownText = if (hintsActive && (gesture.swipeDown?.bubble ?: true)) downHint else null,
             swipeUpKeyLabel = swipeUpKeyLabel,
             swipeDownKeyLabel = swipeDownKeyLabel,
         )
@@ -524,16 +524,34 @@ private fun T9KeyboardContent(
         }
     }
 
-    /** 九键数字输入键：点按固定为九键数字输入；键面字母/长按候选/手势可配。 */
+    /**
+     * 九键数字输入键：点按默认走九键数字输入（`keys.<id>.tap.action` 可改绑）；键面字母/长按候选/手势可配。
+     */
     @Composable
     fun DigitKey(digit: String, modifier: Modifier) {
-        val longPress = digitLongPress(digit)
+        val binding = KeysConfigHelper.getT9KeyGesture(digit)
+        val tap = binding?.tap
+        // 只有显式配置了动作才改绑点按，否则保持内置的九键数字输入（维护 T9 组合/候选语义）。
+        // 注意不能用 `tap.action != null` 判断：label-only 的内置配置会被解析器兜底为
+        // SEND_RIME（value 空），那种情况仍须走 onDigitPressed。
+        val tapRebinds = t9DigitTapRebinds(tap)
+        val onDigitClick: () -> Unit = {
+            if (tapRebinds) {
+                invokeKeyAction(tap, onKeyPress, callbacks.onCommitText, onGestureAction)
+            } else {
+                controller.onDigitPressed(digit)
+            }
+        }
+        val longPressConfig = binding?.longPress
+        val longPressActionMap = longPressConfig?.let { KeysConfigHelper.longPressActionMap(it) }
+        val longPress = longPressConfig?.let { KeysConfigHelper.longPressDisplayItems(it) }
+            ?: digitLongPress(digit)
         if (longPress.isNullOrEmpty()) {
             // 无长按候选（默认 "1" 分词键）：无长按弹出、按下态不进滑动气泡层（历史路径）
             NineKeyButton(
                 digit = digit,
                 letters = digitLetters(digit),
-                onClick = { controller.onDigitPressed(digit) },
+                onClick = onDigitClick,
                 backgroundColor = keyBackgroundColor, textColor = keyTextColor,
                 modifier = modifier,
                 onPress = { onKeyPressDown?.invoke(digit) },
@@ -545,8 +563,17 @@ private fun T9KeyboardContent(
             T9DigitKey(
                 swipes = swipesFor(digit),
                 digit = digit, letters = digitLetters(digit), longPressItems = longPress,
-                onClick = { controller.onDigitPressed(digit) },
-                onLongPressSelect = { letter -> controller.clearAll(); onKeyPress(letter) },
+                onClick = onDigitClick,
+                onLongPressSelect = { selected ->
+                    // 与 26 键同语义：配置了动作就按动作分派；未配置/无动作仍走内置「清空 + 上屏所选」
+                    val gesture = longPressActionMap?.get(selected)
+                    controller.clearAll()
+                    if (gesture != null && gesture.action != null) {
+                        invokeKeyAction(gesture, onKeyPress, callbacks.onCommitText, onGestureAction)
+                    } else {
+                        onKeyPress(gesture?.value?.takeIf { it.isNotEmpty() } ?: selected)
+                    }
+                },
                 onSwipeStateChange = { state, bounds ->
                     if (!(state.isPressed && !state.isLongPress && state.pressedText != null))
                         onSwipeStateChange?.invoke(state, bounds)
@@ -573,8 +600,19 @@ private fun T9KeyboardContent(
         // 键名兜底显示：含小写字母时显示大写键名（与全键盘键名兜底一致）
         val label = configLabel ?: id.takeIf { it.any { ch -> ch in 'a'..'z' } }?.uppercase() ?: id
         val swipes = swipesFor(id)
+        // 长按候选：与 26 键同一套解析（label 回退 value；非 commit 动作走统一分派）
+        val longPressConfig = binding?.longPress
+        val longPressItems = longPressConfig?.let { KeysConfigHelper.longPressDisplayItems(it) }
+        val longPressActionMap = longPressConfig?.let { KeysConfigHelper.longPressActionMap(it) }
+        // 左右滑与上滑共用 SwipeableKeyButton 的 onSwipe，必须按方向参数分派：
+        // 此前忽略方向（恒跑上滑处理器）→ 左/右滑会误触发上滑动作。
+        // 三者都没配置时仍传 null，保持「无手势绑定」的原判定（不影响点击/拖拽判定）。
+        val swipeLeftHandler = swipeHandlerFor(binding?.swipeLeft, commitDirect, onGestureAction)
+        val swipeRightHandler = swipeHandlerFor(binding?.swipeRight, commitDirect, onGestureAction)
         SwipeableKeyButton(
             text = label,
+            // tap.bubble: false → 不弹按压气泡（默认 true，行为与改动前一致）
+            pressText = label.takeIf { tap?.bubble ?: true },
             onClick = {
                 if (tap != null && tap.action != null) {
                     invokeKeyAction(tap, onKeyPress, callbacks.onCommitText, onGestureAction)
@@ -590,8 +628,20 @@ private fun T9KeyboardContent(
             swipeDownText = swipes.swipeDownText,
             swipeUpKeyLabel = swipes.swipeUpKeyLabel,
             swipeDownKeyLabel = swipes.swipeDownKeyLabel,
-            onSwipe = swipes.onSwipeUp?.let { handler -> { _: String -> handler() } },
+            onSwipe = if (swipes.onSwipeUp != null || swipeLeftHandler != null || swipeRightHandler != null) {
+                { dir ->
+                    when (dir) {
+                        "left" -> swipeLeftHandler?.invoke()
+                        "right" -> swipeRightHandler?.invoke()
+                        else -> swipes.onSwipeUp?.invoke()
+                    }
+                }
+            } else null,
             onSwipeDown = swipes.onSwipeDown?.let { handler -> { _: String -> handler() } },
+            onLongPressSelect = { selected ->
+                dispatchLongPressSelection(selected, longPressActionMap, onKeyPress, callbacks.onCommitText, onGestureAction)
+            },
+            longPressItems = longPressItems,
             shadowEnabled = shadowEnabled,
             shadowElevation = shadowElevation,
             shadowShapeRadius = shadowShapeRadius,
@@ -640,6 +690,7 @@ private fun T9KeyboardContent(
                 onClick = { onKeyPress("ime_switch") },
                 backgroundColor = keyBackgroundColor, iconColor = keyTextColor,
                 modifier = modifier,
+                a11yDescription = "中英切换",
                 onPress = { onKeyPressDown?.invoke("ime_switch") },
                 shadowEnabled = shadowEnabled, shadowElevation = shadowElevation, shadowShapeRadius = shadowShapeRadius,
             )
@@ -650,6 +701,7 @@ private fun T9KeyboardContent(
                 backgroundColor = specialKeyBackgroundColor,
                 iconColor = specialKeyTextColor,
                 modifier = modifier,
+                a11yDescription = "退格",
                 swipeText = if (compactMode) null else "清空",
                 onSwipe = { onKeyPress("clear_composition") },
                 onPress = { onKeyPressDown?.invoke("delete") },
@@ -823,11 +875,15 @@ private fun T9DigitKey(
         onLongPressSelect = { letter -> currentOnLongPressSelect?.invoke(letter) },
         onSwipeStateChange = onSwipeStateChange,
         badgeText = digit,
+        a11yDescription = "数字$digit，字母$letters",
         swipeText = currentSwipes.swipeUpText,
         swipeDownText = currentSwipes.swipeDownText,
         swipeUpKeyLabel = currentSwipes.swipeUpKeyLabel,
         swipeDownKeyLabel = currentSwipes.swipeDownKeyLabel,
-        onSwipe = currentSwipes.onSwipeUp?.let { handler -> { _: String -> handler() } },
+        onSwipe = if (currentSwipes.onSwipeUp != null) {
+            // 横向滑动不得落到上滑处理器（此前忽略方向 → 左/右滑会误输入上滑内容）
+            { dir -> if (dir != "left" && dir != "right") currentSwipes.onSwipeUp?.invoke() }
+        } else null,
         onSwipeDown = currentSwipes.onSwipeDown?.let { handler -> { _: String -> handler() } },
         shadowEnabled = shadowEnabled,
         shadowElevation = shadowElevation,
@@ -921,11 +977,15 @@ private fun NineKeyButton(
         modifier = modifier,
         onPress = onPress,
         badgeText = digit,
+        a11yDescription = "数字$digit，字母$letters",
         swipeText = swipes.swipeUpText,
         swipeDownText = swipes.swipeDownText,
         swipeUpKeyLabel = swipes.swipeUpKeyLabel,
         swipeDownKeyLabel = swipes.swipeDownKeyLabel,
-        onSwipe = swipes.onSwipeUp?.let { handler -> { _: String -> handler() } },
+        onSwipe = if (swipes.onSwipeUp != null) {
+            // 横向滑动不得落到上滑处理器（此前忽略方向 → 左/右滑会误输入上滑内容）
+            { dir -> if (dir != "left" && dir != "right") swipes.onSwipeUp?.invoke() }
+        } else null,
         onSwipeDown = swipes.onSwipeDown?.let { handler -> { _: String -> handler() } },
         shadowEnabled = shadowEnabled,
         shadowElevation = shadowElevation,

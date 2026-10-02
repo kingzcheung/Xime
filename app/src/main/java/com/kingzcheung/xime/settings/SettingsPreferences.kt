@@ -51,9 +51,6 @@ object SettingsPreferences {
     @JvmStatic
     var defaultDarkMode: Int = 2
     
-    const val KEY_SWIPE_UP_HINTS_ENABLED = "swipe_up_hints_enabled"
-    const val KEY_SWIPE_DOWN_HINTS_ENABLED = "swipe_down_hints_enabled"
-    const val KEY_SHOW_PRESS_BUBBLE = "show_press_bubble"
     const val KEY_LANDSCAPE_SPLIT_KEYBOARD_ENABLED = "landscape_split_keyboard_enabled"
     const val KEY_HARDWARE_KEYBOARD_DETECTION_ENABLED = "hardware_keyboard_detection_enabled"
 
@@ -561,30 +558,6 @@ object SettingsPreferences {
         getPrefs(context).edit().putString("plugin_net_pending_$pluginId", "").apply()
     }
     
-    fun isSwipeUpHintsEnabled(context: Context): Boolean {
-        return getPrefs(context).getBoolean(KEY_SWIPE_UP_HINTS_ENABLED, true)
-    }
-    
-    fun setSwipeUpHintsEnabled(context: Context, enabled: Boolean) {
-        getPrefs(context).edit().putBoolean(KEY_SWIPE_UP_HINTS_ENABLED, enabled).apply()
-    }
-    
-    fun isSwipeDownHintsEnabled(context: Context): Boolean {
-        return getPrefs(context).getBoolean(KEY_SWIPE_DOWN_HINTS_ENABLED, true)
-    }
-
-    fun setSwipeDownHintsEnabled(context: Context, enabled: Boolean) {
-        getPrefs(context).edit().putBoolean(KEY_SWIPE_DOWN_HINTS_ENABLED, enabled).apply()
-    }
-
-    fun shouldShowPressBubble(context: Context): Boolean {
-        return getPrefs(context).getBoolean(KEY_SHOW_PRESS_BUBBLE, true)
-    }
-
-    fun setShowPressBubble(context: Context, show: Boolean) {
-        getPrefs(context).edit().putBoolean(KEY_SHOW_PRESS_BUBBLE, show).apply()
-    }
-
     /** 横屏时是否使用分体键盘，默认关闭，由用户按需开启。 */
     fun isLandscapeSplitKeyboardEnabled(context: Context): Boolean {
         return getPrefs(context).getBoolean(KEY_LANDSCAPE_SPLIT_KEYBOARD_ENABLED, false)
@@ -631,11 +604,10 @@ object SettingsPreferences {
 
     fun getKeyboardHeightDp(context: Context, isLandscape: Boolean): Int {
         val key = if (isLandscape) KEY_KEYBOARD_HEIGHT_DP_LANDSCAPE else KEY_KEYBOARD_HEIGHT_DP
-        val alt = if (isLandscape) KEY_KEYBOARD_HEIGHT_DP else KEY_KEYBOARD_HEIGHT_DP_LANDSCAPE
         val stored = getPrefs(context).getInt(key, -1)
         if (stored > 0) return stored
-        val altStored = getPrefs(context).getInt(alt, -1)
-        if (altStored > 0) return altStored
+        // 不做跨方向回退：竖屏高度（可达屏高 60%）放到横屏短边上必然超出屏幕
+        // （曾表现为"横屏键盘高得离谱"），横竖屏各自用自己的键 + 自己的默认值
         return getDefaultKeyboardHeightDp(context, isLandscape)
     }
 
@@ -662,6 +634,28 @@ object SettingsPreferences {
 
     fun setKeyboardBottomPaddingDp(context: Context, paddingDp: Int) {
         getPrefs(context).edit().putInt(KEY_KEYBOARD_BOTTOM_PADDING_DP, paddingDp).apply()
+    }
+
+    /** 键盘左边距（dp）：>0 时键盘左缘内收（宽度调节；左右独立，可整体偏移）。 */
+    private const val KEY_KEYBOARD_MARGIN_START_DP = "keyboard_margin_start_dp"
+
+    /** 键盘右边距（dp）。 */
+    private const val KEY_KEYBOARD_MARGIN_END_DP = "keyboard_margin_end_dp"
+
+    fun getKeyboardMarginStartDp(context: Context): Int {
+        return getPrefs(context).getInt(KEY_KEYBOARD_MARGIN_START_DP, 0)
+    }
+
+    fun setKeyboardMarginStartDp(context: Context, marginDp: Int) {
+        getPrefs(context).edit().putInt(KEY_KEYBOARD_MARGIN_START_DP, marginDp).apply()
+    }
+
+    fun getKeyboardMarginEndDp(context: Context): Int {
+        return getPrefs(context).getInt(KEY_KEYBOARD_MARGIN_END_DP, 0)
+    }
+
+    fun setKeyboardMarginEndDp(context: Context, marginDp: Int) {
+        getPrefs(context).edit().putInt(KEY_KEYBOARD_MARGIN_END_DP, marginDp).apply()
     }
 
     fun isSchemaImportWarningDismissed(context: Context): Boolean {

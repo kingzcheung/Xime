@@ -35,6 +35,8 @@ let taskId = '';
 let audioReady = false;
 let seq = 1;
 let prebuffer: Uint8Array[] = [];
+// 建连完成前收到 stop：置位后由 onWsOpen 在配置包之后按序补发缓存与结束包
+let stopPending = false;
 
 function isConfigured(): boolean {
   const apiKey = host.config.get(KEY_API_KEY);
@@ -105,6 +107,7 @@ async function start(): Promise<boolean> {
   audioReady = false;
   seq = 1;
   prebuffer = [];
+  stopPending = false;
 
   const headers: Record<string, string> = {};
   const apiKey = host.config.get(KEY_API_KEY);
@@ -161,6 +164,14 @@ async function onWsOpen(): Promise<void> {
   }
   seq = seq + 1;
   audioReady = true;
+  // 配置包已就绪：建连期间缓冲的开头音频按录制顺序立即补发，
+  // 否则随后录到的实时帧会先发出去，造成音频乱序
+  await flushPrebuffer();
+  if (stopPending) {
+    // 建连完成前已收到 stop：必须等配置包发出后再补发结束包，保证 INIT → 音频 → END
+    stopPending = false;
+    await sendLastFrame();
+  }
 }
 
 async function onWsBinary(frame: Uint8Array): Promise<void> {
@@ -190,21 +201,47 @@ function onWsClose(): void {
   audioReady = false;
   seq = 1;
   prebuffer = [];
+  stopPending = false;
 }
 
 // ================= 音频数据（主 App 每帧提交，JS 决策） =================
 
+/** 发送一帧音频（gzip + 帧头 + seq 自增）；实时帧与建连补发共用。 */
+async function sendAudioFrame(pcm: Uint8Array): Promise<void> {
+  const gz = await gzipOrNil(pcm);
+  if (gz === null) return;
+  try {
+    await host.ws.sendBinary(buildFrame(MSG_AUDIO_ONLY, seq, 0x0, 0x1, gz));
+  } catch (e) {
+    host.asr.emitError((e as Error).message);
+  }
+  seq = seq + 1;
+}
+
+/** 补发建连期间缓冲的音频，保持录制顺序。 */
+async function flushPrebuffer(): Promise<void> {
+  // 先摘链再发送：补发过程中新到的帧写进新的 prebuffer，不会插到补发帧前面
+  const pending = prebuffer;
+  prebuffer = [];
+  for (const pcm of pending) {
+    await sendAudioFrame(pcm);
+  }
+}
+
+/** 最后一包：flags=0x3（NEG_WITH_SEQUENCE）且 seq 取负。 */
+async function sendLastFrame(): Promise<void> {
+  const lastGz = await gzipOrNil(utf8Encode(''));
+  if (lastGz === null) return;
+  try {
+    await host.ws.sendBinary(buildFrame(MSG_AUDIO_ONLY, -seq, 0x0, 0x1, lastGz));
+  } catch (e) {
+    host.asr.emitError((e as Error).message);
+  }
+}
+
 async function processAudioChunk(pcm: Uint8Array): Promise<void> {
   if (audioReady) {
-    const gz = await gzipOrNil(pcm);
-    if (gz !== null) {
-      try {
-        await host.ws.sendBinary(buildFrame(MSG_AUDIO_ONLY, seq, 0x0, 0x1, gz));
-      } catch (e) {
-        host.asr.emitError((e as Error).message);
-      }
-      seq = seq + 1;
-    }
+    await sendAudioFrame(pcm);
   } else {
     prebuffer.push(pcm);
     if (prebuffer.length > 300) prebuffer.shift();
@@ -213,27 +250,14 @@ async function processAudioChunk(pcm: Uint8Array): Promise<void> {
 
 async function stop(): Promise<void> {
   if (taskId === '') return;
-  for (const frame of prebuffer) {
-    const gz = await gzipOrNil(frame);
-    if (gz !== null) {
-      try {
-        await host.ws.sendBinary(buildFrame(MSG_AUDIO_ONLY, seq, 0x0, 0x1, gz));
-      } catch (e) {
-        host.asr.emitError((e as Error).message);
-      }
-      seq = seq + 1;
-    }
+  if (!audioReady && host.ws.getState() !== 3) {
+    // 配置包尚未发出且连接还在建立中：此刻发音频/结束包会排到 INIT 前面，
+    // 记为待发送，由 onWsOpen 按序补发；连接已关闭时不做等待，让发送错误照常上报
+    stopPending = true;
+    return;
   }
-  prebuffer = [];
-  // 最后一包标记：flags=0x3（NEG_WITH_SEQUENCE）且 seq 取负
-  const lastGz = await gzipOrNil(utf8Encode(''));
-  if (lastGz !== null) {
-    try {
-      await host.ws.sendBinary(buildFrame(MSG_AUDIO_ONLY, -seq, 0x0, 0x1, lastGz));
-    } catch (e) {
-      host.asr.emitError((e as Error).message);
-    }
-  }
+  await flushPrebuffer();
+  await sendLastFrame();
 }
 
 async function cancel(): Promise<void> {
@@ -242,6 +266,7 @@ async function cancel(): Promise<void> {
   audioReady = false;
   seq = 1;
   prebuffer = [];
+  stopPending = false;
 }
 
 const plugin = definePlugin({

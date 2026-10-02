@@ -179,13 +179,31 @@ class WsHostApiImpl(
                 t,
                 category = com.kingzcheung.xime.plugin.core.security.ErrorCategory.STREAM_ERROR
             )
-            state = STATE_CLOSED
+            if (!markClosed(webSocket)) return
             listener?.onError(serverMsg.ifEmpty { t.message ?: "连接失败" })
         }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-            state = STATE_CLOSED
+            if (!markClosed(webSocket)) return
             listener?.onClose()
         }
+    }
+
+    /**
+     * 当前连接已终止：置空 socket 并复位状态。
+     *
+     * 必须置空：否则下一次 [connect] 会命中"Already connected, reusing"而返回一个**死连接**——
+     * 不再有 onOpen，插件的状态机永远停在未就绪（音频只能进 prebuffer）。
+     *
+     * @return 事件是否属于当前连接；false = 已被替换的旧连接的迟到回调（[close] 主动关闭后
+     *         OkHttp 仍会回调），此时不得清掉新连接、也不得通知新会话的监听器。
+     */
+    private fun markClosed(socket: WebSocket): Boolean {
+        synchronized(this) {
+            if (webSocket !== socket) return false
+            webSocket = null
+            state = STATE_CLOSED
+        }
+        return true
     }
 }

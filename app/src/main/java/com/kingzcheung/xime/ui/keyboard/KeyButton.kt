@@ -55,6 +55,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 
 /** 按键视觉缩进（padding），用于消除 spacedBy 死区。
  *  pointerInput 在 padding 之前，触摸区=全尺寸；
@@ -143,6 +149,24 @@ internal fun crispShadowColor(backgroundColor: Color): Color {
     }
 }
 
+/**
+ * TalkBack 无障碍语义层：合并子节点为单一可聚焦按键、Button 角色、双击激活走语义 onClick。
+ *
+ * 语义动作与组件内的 pointerInput 手势互不影响——明眼用户触摸路径零变化；
+ * TalkBack 双击执行 [tap]（绑定组件最新的 onClick）。语义配置只在组合期构建，
+ * 不进入渲染路径、不产生额外重组；[description]/[state] 缺省时靠子 Text 自然朗读。
+ */
+internal fun Modifier.keySemantics(
+    description: String?,
+    state: String?,
+    tap: () -> Unit,
+): Modifier = semantics(mergeDescendants = true) {
+    role = Role.Button
+    if (description != null) contentDescription = description
+    if (state != null) stateDescription = state
+    onClick { tap(); true }
+}
+
 @Composable
 fun KeyButton(
     text: String,
@@ -166,6 +190,10 @@ fun KeyButton(
     shadowEnabled: Boolean = true,
     shadowElevation: Dp = 1.dp,
     shadowShapeRadius: Dp = 8.dp,
+    /** TalkBack 朗读描述；缺省时靠键面 Text 朗读（字母/文本键无需传） */
+    a11yDescription: String? = null,
+    /** TalkBack 状态播报（如 Shift 的"大写锁定"） */
+    a11yState: String? = null,
 ) {
     var isPressed by remember { mutableStateOf(false) }
     var dragOffsetX by remember { mutableStateOf(0f) }
@@ -192,6 +220,8 @@ fun KeyButton(
     // 与 KeyboardView 光标手势激活阈值（activationThresholdPx = 60dp）对齐，
     // 消除 30~60dp 位移区间"点击被取消但光标手势未激活"的死区（打字吃键）。
     val horizontalClickCancelThreshold = with(density) { 60.dp.toPx() }
+    // 父层光标手势已接管横向滑动时，本键不再判定点击（否则会"移动光标 + 打出一个字母"）
+    val cursorGestureActive = LocalCursorGestureActive.current
 
     val shadowModifier = remember(shadowEnabled, shadowElevation, shadowShapeRadius, density, backgroundColor) {
         if (shadowEnabled) {
@@ -238,7 +268,9 @@ fun KeyButton(
                             isSwipeDown = false
                         },
                         onDragEnd = {
-                            val shouldClick = !hasTriggeredSwipeUp && !hasTriggeredSwipeDown && abs(dragOffsetX) < horizontalClickCancelThreshold
+                            val shouldClick = !cursorGestureActive.value &&
+                            !hasTriggeredSwipeUp && !hasTriggeredSwipeDown &&
+                            abs(dragOffsetX) < horizontalClickCancelThreshold
                             if (shouldClick) {
                                 currentOnClick()
                             }
@@ -354,7 +386,8 @@ fun KeyButton(
                 if (isPressed) darkenColor(backgroundColor, 0.2f)
                 else if (isHighlighted) backgroundColor.copy(alpha = 0.8f)
                 else backgroundColor
-            ),
+            )
+            .keySemantics(a11yDescription, a11yState) { currentOnClick() },
         contentAlignment = Alignment.Center
     ) {
         Text(
@@ -408,6 +441,11 @@ fun SwipeableKeyButton(
     isHighlighted: Boolean = false,
     layoutMode: ButtonLayout = ButtonLayout.STANDARD,
     icon: Painter? = null,
+    /**
+     * 按下键帽气泡文本；null = 不弹按压气泡（键配置 `tap.bubble: false`）。
+     * 缺省跟随键面文本，与改动前行为一致。
+     */
+    pressText: String? = text,
     swipeText: String? = null,
     swipeDownText: String? = null,
     /** 下滑文本显示在按键上（气泡为空，用于 display:key） */
@@ -432,6 +470,10 @@ fun SwipeableKeyButton(
     shadowEnabled: Boolean = true,
     shadowElevation: Dp = 1.dp,
     shadowShapeRadius: Dp = 8.dp,
+    /** TalkBack 朗读描述；缺省时靠键面 Text 朗读 */
+    a11yDescription: String? = null,
+    /** TalkBack 状态播报 */
+    a11yState: String? = null,
 ) {
     var isPressed by remember { mutableStateOf(false) }
     var dragOffsetY by remember { mutableStateOf(0f) }
@@ -455,6 +497,7 @@ fun SwipeableKeyButton(
     val currentOnSwipeLeft by rememberUpdatedState(onSwipeLeft)
     val currentOnSwipeRight by rememberUpdatedState(onSwipeRight)
     val currentOnSwipeStateChange by rememberUpdatedState(onSwipeStateChange)
+    val currentPressText by rememberUpdatedState(pressText)
     val currentOnPress by rememberUpdatedState(onPress)
     val currentOnRelease by rememberUpdatedState(onRelease)
     val currentOnClick by rememberUpdatedState(onClick)
@@ -479,6 +522,8 @@ fun SwipeableKeyButton(
     // 横向接管阈值：低于父层光标手势激活阈值（60dp），使配置了左右滑的键优先接管横向滑动
     val horizontalSwipeSuppressThreshold = with(density) { 30.dp.toPx() }
     val suppressCursorMove = LocalSuppressCursorMove.current
+    // 父层光标手势已接管横向滑动时，本键不再判定点击（否则会"移动光标 + 打出一个字母"）
+    val cursorGestureActive = LocalCursorGestureActive.current
 
     val shadowModifier = remember(shadowEnabled, shadowElevation, shadowShapeRadius, density, backgroundColor) {
         if (shadowEnabled) {
@@ -519,7 +564,8 @@ fun SwipeableKeyButton(
                         isSwipeDown = false
                     },
                     onDragEnd = {
-                        val shouldClick = !hasTriggeredSwipeUp && !hasTriggeredSwipeDown &&
+                        val shouldClick = !cursorGestureActive.value &&
+                            !hasTriggeredSwipeUp && !hasTriggeredSwipeDown &&
                             !hasTriggeredSwipeLeft && !hasTriggeredSwipeRight &&
                             abs(dragOffsetX) < horizontalClickCancelThreshold
                         if (shouldClick) {
@@ -585,7 +631,8 @@ fun SwipeableKeyButton(
                                 }
                                 
                                 // 上滑触发只看回调绑定，不依赖提示文本（swipeText 仅控制气泡/键面提示）：
-                                // 提示开关关闭或横屏紧凑不印提示时手势仍可用，与下滑触发语义一致。
+                                // 提示与手势相互独立，提示是否绘制由按键配置的 display/bubble 决定，
+                                // 手势只取决于回调是否绑定，与下滑触发语义一致。
                                 val onSwipeValue = currentOnSwipe
                                 if (dragOffsetY < swipeUpThreshold && !hasTriggeredSwipeUp && onSwipeValue != null) {
                                     hasTriggeredSwipeUp = true
@@ -618,7 +665,7 @@ fun SwipeableKeyButton(
                         onPress = { offset ->
                             lastPressOffset = offset
                             isPressed = true
-                            currentOnSwipeStateChange?.invoke(SwipeState(isPressed = true, pressedText = currentText), buttonBounds)
+                            currentOnSwipeStateChange?.invoke(SwipeState(isPressed = true, pressedText = currentPressText), buttonBounds)
                             currentOnPress?.invoke()
                             val released = tryAwaitRelease()
                             if (released || !dragActivated) {
@@ -649,7 +696,7 @@ fun SwipeableKeyButton(
                     val items = currentLongPressItems ?: return@awaitEachGesture
                     
                     currentOnSwipeStateChange?.invoke(
-                        SwipeState(isPressed = true, pressedText = currentText), buttonBounds
+                        SwipeState(isPressed = true, pressedText = currentPressText), buttonBounds
                     )
                     currentOnPress?.invoke()
                     
@@ -749,7 +796,8 @@ fun SwipeableKeyButton(
                 if (isPressed) backgroundColor.copy(alpha = 0.7f)
                 else if (isHighlighted) backgroundColor.copy(alpha = 0.8f)
                 else backgroundColor
-            ),
+            )
+            .keySemantics(a11yDescription, a11yState) { currentOnClick() },
         contentAlignment = if (layoutMode == ButtonLayout.COMPACT) Alignment.TopStart else Alignment.Center
     ) {
         val contentScale = adaptiveKeyContentScale(maxHeight.value)
@@ -858,17 +906,21 @@ fun SwipeableKeyButton(
             val swipeHintCorner = LocalSwipeHintCorner.current
             if (!(swipeUpKeyLabel ?: swipeText).isNullOrEmpty() && (swipeUpKeyLabel ?: swipeText) != badgeText) {
                 val keyLabel = (swipeUpKeyLabel ?: swipeText)!!
-                val displayText = if (keyLabel.length <= 4) keyLabel else keyLabel.take(4)
+                // 含换行的多行键面提示（如双拼韵母助记 "ue\nve"）：完整按行渲染；
+                // 单行沿用 ≤4 字符截断，行为不变。角标模式的 1.sp 行高会把多行叠死，仅单行适用。
+                val hintLineCount = keyLabel.count { it == '\n' } + 1
+                val displayText = if (hintLineCount > 1) keyLabel
+                    else if (keyLabel.length <= 4) keyLabel else keyLabel.take(4)
                 Text(
                     text = displayText,
                     color = textColor.copy(alpha = 0.6f),
                     fontSize = effectiveSwipeFontSize,
                     fontWeight = FontWeight.Medium,
                     textAlign = TextAlign.Center,
-                    maxLines = 1,
+                    maxLines = hintLineCount,
                     // 角标模式压掉默认行框：标签字体 metrics 的 ascent 大，不压行高字形会
                     // 沉在行框下半部，视觉上贴不到键顶（与下方 badge 的 1.sp 同款）
-                    lineHeight = if (swipeHintCorner) 1.sp else androidx.compose.ui.unit.TextUnit.Unspecified,
+                    lineHeight = if (swipeHintCorner && hintLineCount == 1) 1.sp else androidx.compose.ui.unit.TextUnit.Unspecified,
                     modifier = if (swipeHintCorner) Modifier
                         .align(Alignment.TopEnd)
                         .padding(top = 2.dp, end = 4.dp)
@@ -878,15 +930,18 @@ fun SwipeableKeyButton(
             }
 
             if (!swipeDownKeyLabel.isNullOrEmpty()) {
-                val displayText = if (swipeDownKeyLabel.length <= 4) swipeDownKeyLabel else swipeDownKeyLabel.take(4)
+                // 多行处理与上滑提示同款（含 \n 完整渲染，单行 ≤4 字符截断）
+                val hintLineCount = swipeDownKeyLabel.count { it == '\n' } + 1
+                val displayText = if (hintLineCount > 1) swipeDownKeyLabel
+                    else if (swipeDownKeyLabel.length <= 4) swipeDownKeyLabel else swipeDownKeyLabel.take(4)
                 Text(
                     text = displayText,
                     color = textColor.copy(alpha = 0.5f),
                     fontSize = effectiveSwipeFontSize,
                     fontWeight = FontWeight.Normal,
                     textAlign = TextAlign.Center,
-                    maxLines = 1,
-                    lineHeight = if (swipeHintCorner) 1.sp else androidx.compose.ui.unit.TextUnit.Unspecified,
+                    maxLines = hintLineCount,
+                    lineHeight = if (swipeHintCorner && hintLineCount == 1) 1.sp else androidx.compose.ui.unit.TextUnit.Unspecified,
                     modifier = if (swipeHintCorner) Modifier
                         .align(Alignment.BottomEnd)
                         .padding(end = 4.dp, bottom = 2.dp)
@@ -970,9 +1025,14 @@ fun IconKeyButton(
     shadowEnabled: Boolean = true,
     shadowElevation: Dp = 1.dp,
     shadowShapeRadius: Dp = 8.dp,
+    /** TalkBack 朗读描述（图标键必传，否则读屏读"未标记"） */
+    a11yDescription: String? = null,
+    /** TalkBack 状态播报 */
+    a11yState: String? = null,
 ) {
     var isPressed by remember { mutableStateOf(false) }
     val density = LocalDensity.current
+    val currentOnClick by rememberUpdatedState(onClick)
 
     val shadowModifier = remember(shadowEnabled, shadowElevation, shadowShapeRadius, density, backgroundColor) {
         if (shadowEnabled) {
@@ -1027,7 +1087,8 @@ fun IconKeyButton(
                 if (isPressed) darkenColor(backgroundColor, 0.1f)
                 else if (isHighlighted) darkenColor(backgroundColor, 0.2f)
                 else backgroundColor
-            ),
+            )
+            .keySemantics(a11yDescription, a11yState) { currentOnClick() },
         contentAlignment = Alignment.Center
     ) {
         Icon(
@@ -1077,6 +1138,10 @@ fun SwipeableIconKeyButton(
     shadowEnabled: Boolean = true,
     shadowElevation: Dp = 1.dp,
     shadowShapeRadius: Dp = 8.dp,
+    /** TalkBack 朗读描述（图标键必传，否则读屏读"未标记"） */
+    a11yDescription: String? = null,
+    /** TalkBack 状态播报 */
+    a11yState: String? = null,
 ) {
     var isPressed by remember { mutableStateOf(false) }
     var dragOffsetY by remember { mutableStateOf(0f) }
@@ -1109,6 +1174,8 @@ fun SwipeableIconKeyButton(
     // 横向接管阈值：低于父层光标手势激活阈值（60dp），使配置了左右滑的键优先接管横向滑动
     val horizontalSwipeSuppressThreshold = with(density) { 30.dp.toPx() }
     val suppressCursorMove = LocalSuppressCursorMove.current
+    // 父层光标手势已接管横向滑动时，本键不再判定点击（否则会"移动光标 + 打出一个字母"）
+    val cursorGestureActive = LocalCursorGestureActive.current
     val bubbleShowThresholdUp = swipeUpThreshold
     val bubbleShowThresholdDown = swipeDownThreshold
     
@@ -1222,7 +1289,10 @@ fun SwipeableIconKeyButton(
                         } else if (dragOffsetY < swipeUpThreshold && !hasTriggeredSwipe && onSwipe != null) {
                             hasTriggeredSwipe = true
                             onSwipe()
-                        } else if (!hasTriggeredLongPress && !hasTriggeredSwipeLeft && !hasTriggeredSwipeRight) {
+                        } else if (
+                            !cursorGestureActive.value && !hasTriggeredLongPress &&
+                            !hasTriggeredSwipeLeft && !hasTriggeredSwipeRight
+                        ) {
                             currentOnClick()
                         }
                         dragActivated = false
@@ -1354,7 +1424,8 @@ fun SwipeableIconKeyButton(
                 if (isPressed) darkenColor(backgroundColor, 0.2f)
                 else if (isHighlighted) backgroundColor.copy(alpha = 0.8f)
                 else backgroundColor
-            ),
+            )
+            .keySemantics(a11yDescription, a11yState) { currentOnClick() },
         contentAlignment = Alignment.Center
     ) {
         Icon(

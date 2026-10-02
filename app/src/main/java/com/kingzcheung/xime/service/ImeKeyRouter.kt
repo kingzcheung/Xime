@@ -215,13 +215,25 @@ internal class ImeKeyRouter(private val service: XimeInputMethodService) {
         // 常驻语音模式下开始打字：先结束语音会话（提交已识别文本），再处理按键
         val current = service.uiState.value
         if (current.isVoiceMode && current.voiceSticky) {
-            service.endVoiceSession()
+            // 回车/换行会立即触发宿主动作（聊天应用里回车即"发送"）：必须先封口，
+            // 否则收尾等待中的最终结果在发送之后才落进输入框，内容重复/错位。
+            if (key == "enter" || key == "newline") {
+                service.sealVoiceSessionForSend()
+            } else {
+                service.endVoiceSession()
+            }
         }
         // 长按退格以固定频率重复派发，走合并路径，避免 keyJobs 堆积导致候选栏抖动
         if (key == "delete") {
+            // 删除会话开始（下滑撤回删除）：按下态已开账时为空操作；数字/符号等只发
+            // key、无按下态回调的键盘在此兜底开账（会话由后续按键/撤回请求结算）。
+            service.beginDeleteSession()
             handleDeleteKey()
             return
         }
+        // 按了别的键 → 上一段删除会话立即结算，避免"删除 → 打字 → 删除"被并成一段。
+        // 无活动会话时是一次布尔判断，热路径零开销。
+        service.finishDeleteSession()
         val job = service.serviceScope.launch(service.keyProcessingDispatcher, start = CoroutineStart.LAZY) {
             val state = service.uiState.value
             val candState = service.candidateState.value
@@ -301,22 +313,30 @@ internal class ImeKeyRouter(private val service: XimeInputMethodService) {
                             }
                         }
                     }
+                    // 本次入账来自"清空"：不做落点校验（撤回语义与改动前逐字节一致）。
+                    // 置空锚同时防止上一段删除会话留下的锚误伤本次撤回。
+                    service.lastUndoAnchorText = null
                     needsUIUpdate = true
                 }
                 "undo_clear" -> {
-                    // 下滑撤回 = 撤销"上滑清空"，仅空闲态有效（输入态恢复会插入错误位置），
+                    // 下滑撤回 = 撤销"上滑清空 / 删除"，仅空闲态有效（输入态恢复会插入错误位置），
                     // 判定与 clear_all 共用 hasInputState()。
                     if (!hasInputState(candState)) {
-                        val text = service.lastClearedText
-                        if (text.isNotEmpty()) {
+                        withContext(Dispatchers.Main) {
+                            // 长按连删后直接下滑撤回时，删除会话可能尚未结算（抬手事件与
+                            // 下滑手势同一帧）→ 先结账再读撤销槽。
+                            service.finishDeleteSession()
+                            val text = service.lastClearedText
+                            // 落点校验：删除会话入账时记录了光标前文本，若此后用户又打过字 /
+                            // 移过光标则位置已变，放弃本次撤回，避免把旧内容插错地方。
+                            val anchorOk = text.isNotEmpty() && service.isUndoAnchorValid()
                             service.lastClearedText = ""
-                            withContext(Dispatchers.Main) {
-                                val ic = service.currentInputConnection
-                                if (ic != null) {
-                                    // newCursorPosition=1：光标停在撤回内容末尾；
-                                    // 传 text.length 会被 clamp 到整段文本末尾。
-                                    ic.commitText(text, 1)
-                                }
+                            service.lastUndoAnchorText = null
+                            val ic = service.currentInputConnection
+                            if (anchorOk && ic != null) {
+                                // newCursorPosition=1：光标停在撤回内容末尾；
+                                // 传 text.length 会被 clamp 到整段文本末尾。
+                                ic.commitText(text, 1)
                             }
                         }
                     }

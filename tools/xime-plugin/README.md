@@ -1,7 +1,7 @@
 # xipm — Xime 插件工具链
 
 Xime 输入法插件开发 CLI（Rust 实现）。负责 TypeScript 编译、xipk 打包、插件骨架生成与清单校验，
-以及**免真机单测**（`xipm test`，内嵌 QuickJS + mock host）与**真机热调试**（`xipm dev`/`xipm logs`，adb）。
+以及**免真机单测**（`xipm test`，内嵌 QuickJS + mock host）与**真机调试**（`xipm dev`/`xipm install`/`xipm logs`，adb）。
 
 - **插件源码**：TypeScript（`main.ts` + 可选 `libs/*.ts`，相对 import 自动内联）
 - **编译产物**：IIFE 单文件 `main.js`（无顶层 import/export，QuickJS 脚本模式直接执行）
@@ -19,7 +19,14 @@ cargo run -- --help
 cargo build --release
 ./target/release/xipm --help
 # 提示：若设置了 CARGO_TARGET_DIR，二进制位于 $CARGO_TARGET_DIR/release/xipm
+
+# 方式三：下载 Release 里的预编译二进制（每个平台一个包，文件名带 CLI 版本号）
+#   xipm-<version>-<target>.tar.gz（Windows 为 .zip），target 如 x86_64-unknown-linux-gnu
+xipm --version   # → xipm 0.1.1（版本号来自 tools/xime-plugin/Cargo.toml）
 ```
+
+CLI 版本号独立于 App 版本号（在 `tools/xime-plugin/Cargo.toml` 的 `[package] version`），
+发版时由 release workflow 读出来写进产物文件名。
 
 ## 最常用命令
 
@@ -35,6 +42,12 @@ xipm test
 
 # 真机热调试（watch → 编译打包 → adb 推送 → 广播安装/重载 + 日志跟随）
 xipm dev plugins/my-plugin
+
+# 多设备/无线调试：-s 指定设备序列号（等价 adb -s，全局参数，子命令前后都可写）
+xipm -s 192.168.1.10:5555 dev plugins/my-plugin
+
+# 真机安装：把 xipk（或插件目录，先编译打包）装到手机
+xipm install build/plugin-release/my-plugin-0.1.0.xipk
 
 # 真机插件日志（实时跟随；--history 拉取历史错误）
 xipm logs plugins/my-plugin --history
@@ -67,6 +80,21 @@ cargo run -- pack /tmp/demo/my-plugin --out /tmp/demo/out --release-dir /tmp/dem
 ```
 
 ## 命令参考
+
+### 全局参数
+
+| 参数 | 说明 | 默认 |
+|---|---|---|
+| `-s, --device <SERIAL>` | 指定设备序列号（等价 `adb -s`；`dev`/`install`/`logs` 使用） | 自动采用唯一在线设备 |
+
+```bash
+xipm -s <serial> dev          # 与 adb -s 一致（写在子命令前）
+xipm dev -s <serial>          # 等价写法（写在子命令后）
+xipm dev --device <serial>    # 长参数同样可用
+```
+
+设备序列号会带进后续**所有** adb 调用（`-s <serial> shell` / `exec-out` / `push` …），
+不再依赖 adb 的"默认设备"解析；未指定时从 `adb devices` 自动采用唯一的在线设备。
 
 ### `xipm build [DIR]`
 
@@ -165,14 +193,14 @@ test('未 stub 的网络请求被拒绝', async () => {
 
 ```bash
 xipm dev plugins/my-plugin
-xipm dev --device <serial> --no-logs          # 多设备/无线调试；只热更新不跟日志
+xipm dev -s <serial> --no-logs                # 多设备/无线调试；只热更新不跟日志
 ```
 
 | 参数 | 说明 | 默认 |
 |---|---|---|
 | `--package` | 应用包名 | `com.kingzcheung.xime` |
 | `--adb` | adb 路径（缺省 `$ADB` / `$ANDROID_HOME/platform-tools/adb`（Windows 自动补 `.exe`）/ PATH） | - |
-| `--device` | `adb -s` 设备序列号（无线调试：先 `adb pair`/`connect`） | - |
+| `-s, --device` | 全局参数：`adb -s` 设备序列号（无线调试：先 `adb pair`/`connect`） | 自动采用唯一在线设备 |
 | `--no-logs` | 不跟随设备日志 | 跟随 |
 | `--out` | 构建产物根目录（xipk 暂存 `<out>/dist`） | `build/plugin-dev` |
 
@@ -192,6 +220,29 @@ xipm dev --device <serial> --no-logs          # 多设备/无线调试；只热�
   2. release 通道：CLI 轮询 `logcat -d -s XipmDev` 解析 `INSTALL_OK` / `INSTALL_FAIL`；
      错误落盘跟随与 `xipm logs --history` 在此通道不可用
 
+### `xipm install [XIPK|DIR]`
+
+把插件热安装到手机（与 `xipm dev` 同一热安装通道，但不 watch、不跟日志）：
+
+```bash
+xipm install build/plugin-release/volc-asr-3.0.1.xipk   # 安装现成 xipk
+xipm install plugins/volc-asr                          # 插件目录：先编译打包再安装
+xipm -s <serial> install plugins/volc-asr              # 多设备：全局 -s 指定设备
+```
+
+| 参数 | 说明 | 默认 |
+|---|---|---|
+| `--package` | 应用包名 | `com.kingzcheung.xime` |
+| `--adb` | adb 路径（同 `xipm dev`） | - |
+
+- 目标缺省为当前目录；是**插件目录**时按 `xipm pack` 的默认布局先编译打包
+  （`build/plugin-js/` → `build/plugin-release/<name>-<version>.xipk`）再安装，
+  是 `.xipk` 文件时直接安装
+- 通道自动探测（同 `xipm dev`）：debug 包走 `run-as` 内部目录 + jsonl 回执；
+  release 包走 `/data/local/tmp` + logcat 回执，且需在宿主开启"插件开发模式"
+- 安装后等待设备回执（最长 10s）：`✓ 热安装成功：<插件 id> <信息>` /
+  `✗ 热安装失败：<原因>`；未收到回执时给出排查提示（同 `xipm dev`）
+
 ### `xipm logs [DIR]`
 
 真机插件日志回显（读 `manifest.id` 过滤）：
@@ -200,6 +251,7 @@ xipm dev --device <serial> --no-logs          # 多设备/无线调试；只热�
 xipm logs plugins/my-plugin              # 实时跟随（Ctrl-C 退出）
 xipm logs plugins/my-plugin --history    # 历史错误（宿主 errors.jsonl，run-as）
 xipm logs plugins/my-plugin --history --lines 100 --json
+xipm logs plugins/my-plugin -s <serial>  # 多设备：指定设备（同全局 -s）
 ```
 
 - **实时**：三通道（前两者不依赖 logcat，ROM 后台日志限流时依然可靠）——

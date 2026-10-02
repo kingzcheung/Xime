@@ -28,17 +28,21 @@ pub const TEST_ENTRY: &str = "main.test.ts";
 /// 构建单个插件：`<plugin_dir>/main.ts` → `<out_root>/<plugin_name>/main.js`，
 /// 并复制 manifest.json 与 resources/（xipk 打包与测试加载均基于该产物目录）。
 pub async fn build_plugin(plugin_dir: &Path, out_root: &Path, minify: bool) -> anyhow::Result<BuildOutcome> {
-    let plugin_dir = plugin_dir
-        .canonicalize()
-        .map_err(|e| anyhow::anyhow!("插件目录不存在: {} ({e})", plugin_dir.display()))?;
+    let plugin_dir = strip_unc_prefix(
+        plugin_dir
+            .canonicalize()
+            .map_err(|e| anyhow::anyhow!("插件目录不存在: {} ({e})", plugin_dir.display()))?,
+    );
 
     // 输出根目录规范化为绝对路径：rolldown 的 dir 相对 cwd（插件目录）解释，
     // 相对路径会落到插件目录内（plugins/<name>/build/...），必须绝对化。
     std::fs::create_dir_all(out_root)
         .map_err(|e| anyhow::anyhow!("创建输出目录失败 {}: {e}", out_root.display()))?;
-    let out_root = out_root
-        .canonicalize()
-        .map_err(|e| anyhow::anyhow!("规范化输出目录失败 {}: {e}", out_root.display()))?;
+    let out_root = strip_unc_prefix(
+        out_root
+            .canonicalize()
+            .map_err(|e| anyhow::anyhow!("规范化输出目录失败 {}: {e}", out_root.display()))?,
+    );
 
     let manifest = Manifest::load(&plugin_dir).map_err(|e| anyhow::anyhow!("{e}"))?;
 
@@ -121,9 +125,11 @@ async fn bundle_ts(plugin_dir: &Path, out_dir: &Path, minify: bool) -> anyhow::R
 /// 全局 test/assert 由测试环境注入，源码无需 import/export）。
 pub async fn bundle_test_js(plugin_dir: &Path, out_dir: &Path) -> anyhow::Result<PathBuf> {
     // rolldown 的 cwd/input 需可解析路径：与 build_plugin 一致先规范化
-    let plugin_dir = plugin_dir
-        .canonicalize()
-        .map_err(|e| anyhow::anyhow!("插件目录不存在: {} ({e})", plugin_dir.display()))?;
+    let plugin_dir = strip_unc_prefix(
+        plugin_dir
+            .canonicalize()
+            .map_err(|e| anyhow::anyhow!("插件目录不存在: {} ({e})", plugin_dir.display()))?,
+    );
     let entry = plugin_dir.join(TEST_ENTRY);
     if !entry.is_file() {
         anyhow::bail!("测试入口不存在: {}", entry.display());
@@ -153,10 +159,12 @@ async fn bundle_entry(
     banner: Option<&str>,
     exports: OutputExports,
 ) -> anyhow::Result<()> {
+    // 入口一律用绝对路径：rolldown 在 Windows 上对 cwd + 相对 import 的解析不可靠
+    let abs_entry = plugin_dir.join(entry);
     let mut bundler = Bundler::new(BundlerOptions {
         input: Some(vec![InputItem {
             name: Some(file_name.to_string()),
-            import: entry.to_string(),
+            import: abs_entry.to_string_lossy().into_owned(),
         }]),
         cwd: Some(plugin_dir.to_path_buf()),
         format: Some(OutputFormat::Iife),
@@ -196,4 +204,21 @@ fn copy_dir_all(src: &Path, dst: &Path) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// 去掉 Windows `canonicalize()` 产生的 `\\?\` 扩展长度前缀。
+///
+/// rolldown 会把该前缀归一化成 `//?/C:/...` 并当成模块标识符解析，导致
+/// `UNRESOLVED_ENTRY: Cannot resolve entry module //?/C:/.../main.ts`——
+/// 所有插件在 Windows 上都无法编译。非 Windows 或本身无前缀时原样返回。
+fn strip_unc_prefix(path: PathBuf) -> PathBuf {
+    let raw = path.to_string_lossy();
+    if let Some(rest) = raw.strip_prefix(r"\\?\") {
+        // UNC 共享路径（\\?\UNC\server\share）需还原为 \\server\share
+        if let Some(unc) = rest.strip_prefix(r"UNC\") {
+            return PathBuf::from(format!(r"\\{unc}"));
+        }
+        return PathBuf::from(rest);
+    }
+    path
 }

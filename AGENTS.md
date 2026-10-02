@@ -22,6 +22,8 @@
 - 运行插件测试（免真机；CLI 内嵌 QuickJS + mock host，与真机同引擎）： `xipm test`（仓库根零参数批量，无 main.test.ts 跳过；`--smoke` 做加载冒烟）
 - 真机热调试（watch → 编译打包 → adb 推送 → am start 热安装/重载 + 日志跟随 + 回执）： `xipm dev <插件目录>`（需 adb；debug 宿主直用，release 宿主需先在 设置→关于 连点设备信息 7 次解锁并开启"插件开发模式"；无设备/组件缺失时快速失败）
 - 真机插件日志回显： `xipm logs <插件目录>`（实时 `JsPlugin`/`PluginErrorLog` tag）；`--history` 读宿主 errors.jsonl（仅 debug 宿主）
+- 真机安装 xipk： `xipm install <xipk 文件|插件目录>`（插件目录会先编译打包；与 `xipm dev` 同一热安装通道，装后等设备回执）
+- 指定真机设备（多设备/无线调试，等价 `adb -s`）：全局参数 `-s <序列号>`，可写在子命令前后： `xipm -s <序列号> dev <插件目录>` / `xipm dev <插件目录> -s <序列号>`（缺省自动采用唯一在线设备）
 - 类型检查（可选）： `npx -p typescript tsc -p tsconfig.json --noEmit`
 - SDK 类型定义： `tools/xime-plugin/templates/xime-plugin.d.ts`
 - **完整 CLI 用法**： [tools/xime-plugin/README.md](tools/xime-plugin/README.md)

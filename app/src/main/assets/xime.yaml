@@ -55,8 +55,9 @@ style:
 #   candidate_bar_bg_color                     - 候选栏底色
 #   key_text_color / key_text_color_dark       - 按键文字色（亮/暗）
 #   candidate_text_color / _dark               - 候选文字色（亮/暗）
-#   candidate_selected_text_color / _dark      - 候选选中文字色（亮/暗），未设置时回退到
-#                                                 key_text_color（图片背景看不清时建议单独配置）
+#   candidate_selected_text_color / _dark      - 候选选中文字色（亮/暗），未设置时亮色回退
+#                                                 primary_color 原色、暗色回退 primary 提亮 45%
+#                                                 （灰色系 primary 提亮后仍偏暗时建议单独配置）
 #
 color_schemes:
   # 动态配色（Material You）：颜色由运行时从壁纸调色板派生，随壁纸变化，
@@ -85,14 +86,19 @@ color_schemes:
   sunset_orange:
     name: "落日橙光"
     primary_color: 0xE65100
+    # 深色功能键（确定/删除等）降饱和，避免暗光下刺眼；亮色仍回退 primary 派生
+    special_key_bg_color_dark: 0xD97757
     keyboard_background:
       type: solid
       color: 0xE3E4E8
       color_dark: 0x1A0D00
-  
+
   slate_gray:
     name: "沉稳石墨"
     primary_color: 0x424242
+    # 灰色系 primary 提亮后仍偏暗（≈0x979797），深色模式首选项单独提亮保证辨识度
+    # （非纯白，高对比在暗光下刺眼；普通候选为 0xE8EAED，靠字重+高亮底区分）
+    candidate_selected_text_color_dark: 0xF0F0F0
     keyboard_background:
       type: solid
       color: 0xE3E4E8
@@ -117,6 +123,9 @@ color_schemes:
   sakura_pink:
     name: "樱花粉黛"
     primary_color: 0xe91e63
+    # 该皮肤深色模式为浅色视觉，功能键深色也用浅粉（与亮色派生值一致），
+    # 避免饱和粉红大色块；文字色由宿主按背景亮度自适应取按键文字色
+    special_key_bg_color_dark: 0xFAD2E0
     keyboard_background:
       type: solid
       color: 0xfdf0f4
@@ -667,9 +676,11 @@ keyboard:
     # rows：主区（中间列）按行，每行一个键 id 列表。
     # right：右列（自上而下）。
     # 键 id 分三类：
-    #   1. 数字 "0"~"9"：九键输入键。点按固定为九键数字输入（T9 核心交互）；
+    #   1. 数字 "0"~"9"：九键输入键。点按默认走九键数字输入（T9 核心交互），
+    #      写 keys.<id>.tap.action 即可按手势动作改绑（不写 action 则保持内置行为）；
     #      键面字母用 keys.<id>.tap.label 覆盖（内置：1=分词、2=ABC…9=WXYZ），
-    #      长按候选用 keys.<id>.long_press（上屏所选文本，内置 2=A/B/C…9=W/X/Y/Z，1 无长按），
+    #      长按候选用 keys.<id>.long_press（未配置时用内置 2=A/B/C…9=W/X/Y/Z、1 无长按；
+    #      配置后每项可用 action 触发任意动作，1 也能拥有长按候选），
     #      手势在 keys.<id> 配置（下方内置默认：上滑直接输入键面数字）。
     #   2. 功能键：candidates / symbol(符号) / number(数字面板) / space(空格) /
     #      earth(中英切换) / delete(退格) / clear(重输) / enter(回车)。

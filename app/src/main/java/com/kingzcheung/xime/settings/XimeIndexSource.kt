@@ -21,6 +21,8 @@ data class InstallResult(
     val failureReason: String? = null,
     /** null=未提供sha256, true=校验通过, false=校验不通过 */
     val sha256Status: Sha256Status = null,
+    /** 清单系统判定的文件冲突明细；非空时安装被阻止，供 UI 展示冲突详情。 */
+    val conflicts: List<FileConflictInfo> = emptyList(),
 )
 
 /** 方案列表拉取结果（含命中的来源主机名，供 UI 显示「从哪个端点拉的」）。 */
@@ -561,7 +563,11 @@ object XimeIndexSource {
             val reason = result.failureReason ?: result.conflicts.joinToString("、") { c ->
                 "${c.fileName}（已被 ${c.claimedBy.joinToString("、")} 使用）"
             }
-            return@withContext InstallResult(false, failureReason = reason)
+            return@withContext InstallResult(
+                false,
+                failureReason = reason,
+                conflicts = result.conflicts,
+            )
         }
         InstallResult(success = true, unresolvedDeps = result.unresolvedDeps)
     }

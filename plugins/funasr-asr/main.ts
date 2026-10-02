@@ -32,6 +32,8 @@ const CUSTOM_MODEL = '自定义';
 let taskId = '';
 let audioReady = false;
 let prebuffer: Uint8Array[] = [];
+// task-started 到达前收到 stop：置位后由 onWsMessage 在补发缓存之后发 finish-task
+let stopPending = false;
 
 // ================= 元信息 =================
 
@@ -97,6 +99,7 @@ async function start(): Promise<boolean> {
   taskId = host.uuid();
   audioReady = false;
   prebuffer = [];
+  stopPending = false;
   try {
     await host.ws.connect(WS_URL, { Authorization: 'Bearer ' + apiKey });
   } catch (e) {
@@ -127,6 +130,11 @@ async function onWsMessage(text: string): Promise<void> {
     // 任务就绪：开始直发音频，并冲刷连接建立前缓冲的音频
     audioReady = true;
     await flushPrebuffer();
+    if (stopPending) {
+      // 任务就绪前已收到 stop：先补发开头音频再发 finish-task，否则结束指令会排在音频前面
+      stopPending = false;
+      await sendFinishTask();
+    }
   } else if (event === 'result-generated') {
     const output = msg.payload ? msg.payload.output : null;
     if (output === null || output === undefined) return;
@@ -158,6 +166,7 @@ function onWsClose(): void {
   taskId = '';
   audioReady = false;
   prebuffer = [];
+  stopPending = false;
 }
 
 // ================= 音频数据（主 App 每帧提交，JS 决策） =================
@@ -214,21 +223,31 @@ async function sendRunTask(): Promise<void> {
   }
 }
 
-async function stop(): Promise<void> {
-  if (taskId !== '') {
-    try {
-      await host.ws.sendText(JSON.stringify({
-        header: {
-          action: 'finish-task',
-          task_id: taskId,
-          streaming: 'duplex',
-        },
-        payload: { input: {} },
-      }));
-    } catch (e) {
-      host.asr.emitError((e as Error).message);
-    }
+/** 结束任务：服务端回 task-finished 后断开。 */
+async function sendFinishTask(): Promise<void> {
+  try {
+    await host.ws.sendText(JSON.stringify({
+      header: {
+        action: 'finish-task',
+        task_id: taskId,
+        streaming: 'duplex',
+      },
+      payload: { input: {} },
+    }));
+  } catch (e) {
+    host.asr.emitError((e as Error).message);
   }
+}
+
+async function stop(): Promise<void> {
+  if (taskId === '') return;
+  if (!audioReady && host.ws.getState() !== 3) {
+    // task-started 未到：此刻发 finish-task 会排在缓冲音频之前（服务端已收尾，音频被丢弃），
+    // 记为待发送，由 onWsMessage 补发缓存后再发；连接已关闭时照常发送以暴露错误
+    stopPending = true;
+    return;
+  }
+  await sendFinishTask();
 }
 
 async function cancel(): Promise<void> {
@@ -236,6 +255,7 @@ async function cancel(): Promise<void> {
   taskId = '';
   audioReady = false;
   prebuffer = [];
+  stopPending = false;
 }
 
 const plugin = definePlugin({

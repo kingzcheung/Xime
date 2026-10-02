@@ -300,10 +300,9 @@ private fun StrokeKeyboardContent(
     // 笔画键滑动手势（keyboard.stroke.keys，热重载经 configVersion 感知）：
     // 有配置走配置（可覆盖上滑/新增下滑动作），无配置回退内置默认（上滑提交对应数字）。
     // COMMIT 沿用 onKeyPress（保持笔画模式数字的按键路由语义）。
-    // 提示开关只控制提示显示；组件内上滑触发只看回调绑定，提示关闭/横屏紧凑时手势仍可用。
+    // 提示恒显，是否绘制由按键配置的 display/bubble 决定；手势触发只看回调绑定，与提示无关。
     // 上滑键面提示尊重 display: bubble（仅气泡不印键面）。
     val configVersion by KeysConfigHelper.configVersion.collectAsState()
-    val swipeHints = rememberSwipeHintsEnabled()
     val hintsActive = !compactMode
     // 左侧快捷符号列来自 xime.yaml keyboard.stroke.side_symbols（可自定义，>4 滚动显示）
     val strokeSideSymbols = remember(configVersion) { KeysConfigHelper.getStrokeSideSymbols() }
@@ -332,7 +331,7 @@ private fun StrokeKeyboardContent(
             // 回退行为与内置默认（display: "key"）一致：仅键面提示，无滑动气泡
             return StrokeKeySwipes(
                 onSwipeUp = { onKeyPress(fallbackDigit) },
-                swipeUpKeyLabel = if (swipeHints.up && hintsActive) fallbackDigit else null,
+                swipeUpKeyLabel = if (hintsActive) fallbackDigit else null,
             )
         }
         fun hint(def: KeyAction?): String? =
@@ -340,20 +339,20 @@ private fun StrokeKeyboardContent(
         // display 只管静态键面提示位置（bubble 不画键面，用空串压制回退）；
         // 运行时气泡由 bubble 独立控制。
         val swipeUpKeyLabel = when {
-            !swipeHints.up || !hintsActive -> null
+            !hintsActive -> null
             gesture.swipeUp?.display == DisplayMode.BUBBLE -> ""
             else -> hint(gesture.swipeUp)
         }
         val swipeDownKeyLabel = when {
-            !swipeHints.down || !hintsActive -> null
+            !hintsActive -> null
             gesture.swipeDown?.display == DisplayMode.BUBBLE -> ""
             else -> hint(gesture.swipeDown)
         }
         return StrokeKeySwipes(
             onSwipeUp = swipeHandlerFor(gesture.swipeUp, onKeyPress, onGestureAction),
             onSwipeDown = swipeHandlerFor(gesture.swipeDown, onKeyPress, onGestureAction),
-            swipeUpText = if (swipeHints.up && hintsActive && (gesture.swipeUp?.bubble ?: true)) hint(gesture.swipeUp) else null,
-            swipeDownText = if (swipeHints.down && hintsActive && (gesture.swipeDown?.bubble ?: true)) hint(gesture.swipeDown) else null,
+            swipeUpText = if (hintsActive && (gesture.swipeUp?.bubble ?: true)) hint(gesture.swipeUp) else null,
+            swipeDownText = if (hintsActive && (gesture.swipeDown?.bubble ?: true)) hint(gesture.swipeDown) else null,
             swipeUpKeyLabel = swipeUpKeyLabel,
             swipeDownKeyLabel = swipeDownKeyLabel,
         )
@@ -587,6 +586,7 @@ private fun StrokeKeyboardContent(
                 backgroundColor = specialKeyBackgroundColor,
                 iconColor = specialKeyTextColor,
                 modifier = Modifier.weight(1f),
+                a11yDescription = "退格",
                 swipeText = if (compactMode) null else "清空",
                 onSwipe = { onKeyPress("clear_composition") },
                 onPress = { onKeyPressDown?.invoke("delete") },
@@ -692,13 +692,19 @@ private fun StrokeKeyItem(
 ) {
     SwipeableKeyButton(
         text = mainLabel,
+        // tap.bubble: false → 不弹按压气泡（默认 true，行为与改动前一致）；
+        // 笔画键的配置取自 keyboard.stroke.keys（键 id = 笔画键面字符）
+        pressText = mainLabel.takeIf { KeysConfigHelper.getStrokeKeyGesture(mainLabel)?.tap?.bubble ?: true },
         onClick = onClick,
         backgroundColor = backgroundColor,
         textColor = textColor,
         fontSize = strokeFontSize,
         modifier = modifier,
         onPress = onPress,
-        onSwipe = swipes.onSwipeUp?.let { handler -> { _: String -> handler() } },
+        onSwipe = if (swipes.onSwipeUp != null) {
+            // 笔画键盘只接线了上/下滑：横向滑动不得落到上滑处理器（此前忽略方向 → 左/右滑会误输入上滑内容）
+            { dir -> if (dir != "left" && dir != "right") swipes.onSwipeUp?.invoke() }
+        } else null,
         onSwipeDown = swipes.onSwipeDown?.let { handler -> { _: String -> handler() } },
         onSwipeStateChange = onSwipeStateChange,
         badgeText = swipeDigit,
@@ -736,7 +742,10 @@ private fun StrokeDigitKey(
         textColor = textColor,
         modifier = modifier,
         onPress = onPress,
-        onSwipe = swipes.onSwipeUp?.let { handler -> { _: String -> handler() } },
+        onSwipe = if (swipes.onSwipeUp != null) {
+            // 笔画键盘只接线了上/下滑：横向滑动不得落到上滑处理器（此前忽略方向 → 左/右滑会误输入上滑内容）
+            { dir -> if (dir != "left" && dir != "right") swipes.onSwipeUp?.invoke() }
+        } else null,
         onSwipeDown = swipes.onSwipeDown?.let { handler -> { _: String -> handler() } },
         onSwipeStateChange = onSwipeStateChange,
         badgeText = swipeDigit,

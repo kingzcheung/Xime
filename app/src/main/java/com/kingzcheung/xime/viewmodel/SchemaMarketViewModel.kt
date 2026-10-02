@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kingzcheung.xime.BuildConfig
+import com.kingzcheung.xime.settings.FileConflictInfo
 import com.kingzcheung.xime.settings.MarketSchemeItem
 import com.kingzcheung.xime.settings.MarketVersionStore
 import com.kingzcheung.xime.settings.SchemaManager
@@ -31,6 +32,10 @@ data class SchemaMarketUiState(
     val sha256Status: Map<String, Boolean?> = emptyMap(),
     val errorMessage: String? = null,
     val toastMessage: String? = null,
+    /** 安装被清单系统阻止时的文件冲突明细（同名不同内容），非空时 UI 弹冲突对话框。 */
+    val conflictDetails: List<FileConflictInfo> = emptyList(),
+    /** 触发冲突的方案名（对话框标题用）。 */
+    val conflictSchemeName: String = "",
     val searchQuery: String = "",
     // 本次方案列表实际命中的来源端点主机名（如 index.ximei.me），用于在界面上显示「从哪个端点拉的」
     val source: String = "",
@@ -281,11 +286,22 @@ class SchemaMarketViewModel(application: Application) : AndroidViewModel(applica
                     }
                 }
                 showToast(msg)
+            } else if (install.conflicts.isNotEmpty()) {
+                // 文件冲突：弹对话框展示明细，不再走一行 Toast
+                _uiState.update { st ->
+                    st.copy(
+                        conflictDetails = install.conflicts,
+                        conflictSchemeName = item.scheme.name,
+                    )
+                }
             } else {
                 showToast(install.failureReason ?: "安装失败")
             }
         }
     }
+
+    /** 关闭安装冲突对话框。 */
+    fun clearConflict() = _uiState.update { it.copy(conflictDetails = emptyList(), conflictSchemeName = "") }
 
     fun clearToast() = _uiState.update { it.copy(toastMessage = null) }
     private fun showToast(message: String) = _uiState.update { it.copy(toastMessage = message) }

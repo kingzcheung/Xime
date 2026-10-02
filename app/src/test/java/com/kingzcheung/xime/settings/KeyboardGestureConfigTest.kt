@@ -139,19 +139,51 @@ class KeyboardGestureConfigTest {
     }
 
     @Test
-    fun `long_press display key 关闭气泡`() {
+    fun `long_press display key 回退为气泡（键面绘制未实现）`() {
         val lp = parse("""q: { long_press: { display: "key", values: ["q", "Q"] } }""")["q"]!!.longPress!!
-        assertEquals(DisplayMode.KEY, lp.display)
+        assertEquals(DisplayMode.BUBBLE, lp.display)
         assertEquals(2, lp.values.size)
     }
 
     @Test
-    fun `long_press 单动作重复写成单元素列表`() {
-        val lp = parse("delete: { long_press: { values: [{ action: \"delete\", repeat: true }] } }")["delete"]!!.longPress!!
+    fun `label 写成数组按多行合并`() {
+        val kb = parse("""q: { swipe_down: { label: ["q", "Q", "9"], action: "none" } }""")["q"]!!
+        assertEquals("q\nQ\n9", kb.swipeDown!!.label)
+    }
+
+    @Test
+    fun `icon 字段与 label 的 @ 前缀等价`() {
+        val byField = parse("""q: { swipe_up: { icon: "mic", action: "voice" } }""")["q"]!!.swipeUp!!
+        assertEquals("mic", byField.icon)
+        assertEquals("", byField.label)
+        val byLabel = parse("""x: { swipe_up: { label: "@mic", action: "voice" } }""")["x"]!!.swipeUp!!
+        assertEquals("mic", byLabel.icon)
+        assertEquals("", byLabel.label)
+        // 显式 icon 优先，普通 label 原样保留
+        val both = parse("""y: { swipe_up: { icon: "emoji", label: "表情" } }""")["y"]!!.swipeUp!!
+        assertEquals("emoji", both.icon)
+        assertEquals("表情", both.label)
+    }
+
+    @Test
+    fun `未知字段被忽略且不影响其余字段`() {
+        val kb = parse("""q: { swipe_up: { swip_up: "1", action: "commit", value: "1" } }""")["q"]!!
+        assertEquals(GestureAction.COMMIT, kb.swipeUp!!.action)
+        assertEquals("1", kb.swipeUp!!.value)
+    }
+
+    @Test
+    fun `long_press 单动作写成单元素列表`() {
+        val lp = parse("delete: { long_press: { values: [{ action: \"delete\" }] } }")["delete"]!!.longPress!!
         assertEquals(1, lp.values.size)
         assertEquals(GestureAction.DELETE, lp.values[0].action)
-        assertTrue(lp.values[0].repeat)
-        assertTrue(lp.repeat)
+    }
+
+    @Test
+    fun `已移除的死字段被静默忽略`() {
+        // when_composing / sticky / repeat 已从 schema 移除：写入配置不影响其它字段解析
+        val kc = parse("""q: { sticky: true, swipe_up: { value: "1", repeat: true }, when_composing: { tap: "a" } }""")["q"]!!
+        assertEquals("1", kc.swipeUp!!.value)
     }
 
     @Test
@@ -168,26 +200,37 @@ class KeyboardGestureConfigTest {
         assertNull(lp)
     }
 
-    // ── when_composing / sticky ──
-
     @Test
-    fun `when_composing 组合态覆盖解析`() {
-        val kc = parse("""
-            return:
-              tap: "enter"
-              when_composing:
-                tap: { action: "command", value: "commit_raw" }
-        """.trimIndent())["return"]!!
-        assertEquals(GestureAction.SEND_RIME, kc.tap!!.action)
-        assertNotNull(kc.composing)
-        assertEquals(GestureAction.COMMAND, kc.composing!!.tap!!.action)
-        assertEquals("commit_raw", kc.composing!!.tap!!.value)
+    fun `long_press 显示项无 label 时回退 value`() {
+        val lp = parse("""a: { long_press: { values: [{ value: "，" }, { label: "。", value: "。" }] } }""")["a"]!!.longPress!!
+        assertEquals(listOf("，", "。"), KeysConfigHelper.longPressDisplayItems(lp))
     }
 
     @Test
-    fun `键级 sticky 解析`() {
-        val kc = parse("shift: { tap: \"shift\", sticky: true }")["shift"]!!
-        assertTrue(kc.sticky)
+    fun `long_press 显示项与动作映射的键完全一致`() {
+        val lp = parse("""a: { long_press: { values: [{ value: "，" }, { label: "复制", action: "copy" }] } }""")["a"]!!.longPress!!
+        val map = KeysConfigHelper.longPressActionMap(lp)!!
+        assertEquals(setOf("，", "复制"), map.keys)
+        assertEquals(GestureAction.COMMIT, map["，"]!!.action)
+        assertEquals(GestureAction.COPY, map["复制"]!!.action)
+    }
+
+    @Test
+    fun `long_press 显示项与查找键都为空时该项被丢弃`() {
+        val lp = parse("""a: { long_press: { values: [{ action: "copy" }, { label: "复制", action: "copy" }] } }""")["a"]!!.longPress!!
+        assertEquals(listOf("复制"), KeysConfigHelper.longPressDisplayItems(lp))
+        assertEquals(setOf("复制"), KeysConfigHelper.longPressActionMap(lp)!!.keys)
+    }
+
+    @Test
+    fun `long_press 超过 10 项时截断为 10 项`() {
+        val items = (1..12).joinToString(", ") { """{ value: "$it" }""" }
+        val lp = parse("""a: { long_press: { values: [$items] } }""")["a"]!!.longPress!!
+        assertEquals(10, lp.values.size)
+        assertEquals(
+            listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"),
+            KeysConfigHelper.longPressDisplayItems(lp),
+        )
     }
 
     @Test
@@ -253,6 +296,50 @@ class KeyboardGestureConfigTest {
         assertEquals(2, zh.size)
         assertNotNull(zh["w"])
         assertNull(zh["z"])
+    }
+
+    // ── 上滑默认值回退（旧默认符号表只在未配置 swipe_up 时生效） ──
+
+    @Test
+    fun `未配置 swipe_up 的键回退旧默认表`() {
+        KeysConfigHelper.setKeyGestureConfigForTest(emptyMap())
+        assertEquals("1", KeysConfigHelper.getSwipeUpCommitValue("q"))
+        assertEquals("1", KeysConfigHelper.getSwipeUpLabel("q"))
+    }
+
+    @Test
+    fun `配置了 swipe_up 但无 label 与 value 时不再回退旧默认表`() {
+        KeysConfigHelper.setKeyGestureConfigForTest(
+            mapOf("q" to KeyBinding(swipeUp = KeyAction(action = GestureAction.COPY)))
+        )
+        assertNull(KeysConfigHelper.getSwipeUpCommitValue("q"))
+        assertNull(KeysConfigHelper.getSwipeUpLabel("q"))
+        // 复位，避免影响其它用例
+        KeysConfigHelper.setKeyGestureConfigForTest(emptyMap())
+    }
+
+    // ── 按压气泡开关（tap.bubble，默认 true） ──
+
+    @Test
+    fun `tap 的 bubble 默认开启`() {
+        assertTrue(parse("q: { tap: \"q\" }")["q"]!!.tap!!.bubble)
+        assertTrue(parse("q: { tap: { value: \"q\", label: \"q\" } }")["q"]!!.tap!!.bubble)
+    }
+
+    @Test
+    fun `tap 的 bubble 可关闭且不影响其它字段`() {
+        val tap = parse("q: { tap: { label: \"q\", value: \"q\", bubble: false } }")["q"]!!.tap!!
+        assertFalse(tap.bubble)
+        assertEquals("q", tap.label)
+        assertEquals("q", tap.value)
+        assertEquals(GestureAction.SEND_RIME, tap.action)
+    }
+
+    @Test
+    fun `tap 与 swipe 的气泡开关互相独立`() {
+        val binding = parse("q: { tap: { value: \"q\", bubble: false }, swipe_up: { value: \"1\", bubble: true } }")["q"]!!
+        assertFalse(binding.tap!!.bubble)
+        assertTrue(binding.swipeUp!!.bubble)
     }
 
     // ── 辅助 ──

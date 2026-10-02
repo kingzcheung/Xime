@@ -76,4 +76,11 @@ class PluginDiagnosticTextTest {
         assertTrue(text.contains("（无）"))
         assertEquals(0, text.split("\n").count { it.startsWith("1. ") })
     }
+
+    @Test
+    fun `error summary reflects count`() {
+        assertEquals("有 1 条错误记录", pluginErrorSummary(1))
+        assertEquals("有 7 条错误记录", pluginErrorSummary(7))
+        assertEquals("暂无错误记录", pluginErrorSummary(0))
+    }
 }

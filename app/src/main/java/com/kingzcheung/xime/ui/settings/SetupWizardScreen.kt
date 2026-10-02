@@ -28,7 +28,7 @@ import com.kingzcheung.xime.rime.RimeEngine
 import com.kingzcheung.xime.settings.SchemaManager
 import com.kingzcheung.xime.settings.SettingsPreferences
 import com.kingzcheung.xime.ui.ContentMaxWidth
-import com.kingzcheung.xime.ui.isTablet
+import com.kingzcheung.xime.ui.TwoPaneMinWidth
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -173,32 +173,34 @@ fun SetupWizardScreen(
             val contentModifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-            // 平板（sw600dp+）：左侧竖向步骤导航 + 右侧内容；手机：顶部横向指示器 + 内容。
-            if (isTablet()) {
-                TabletWizardLayout(
-                    modifier = contentModifier,
-                    currentStep = currentStep,
-                    stepContent = stepContent
-                )
-            } else {
-                PhoneWizardLayout(
-                    modifier = contentModifier,
-                    currentStep = currentStep,
-                    stepContent = stepContent
-                )
+            // 双栏分档按当前窗口实际宽度（BoxWithConstraints）：手机横屏（600dp+）
+            // 也得双栏（左导航 + 右内容），竖屏矮视口不再被横向指示器+居中内容挤压；
+            // 平板任何方向与此前一致。isTablet() 是设备分档（sw600dp，不随方向变），
+            // 无法覆盖手机横屏，故不再用。
+            BoxWithConstraints(modifier = contentModifier) {
+                if (maxWidth >= TwoPaneMinWidth) {
+                    TwoPaneWizardLayout(
+                        currentStep = currentStep,
+                        stepContent = stepContent
+                    )
+                } else {
+                    SinglePaneWizardLayout(
+                        currentStep = currentStep,
+                        stepContent = stepContent
+                    )
+                }
             }
         }
     }
 }
 
-/** 手机单栏：顶部横向步骤指示器 + 可滚动的步骤内容。 */
+/** 窄容器单栏：顶部横向步骤指示器 + 可滚动的步骤内容。 */
 @Composable
-private fun PhoneWizardLayout(
-    modifier: Modifier,
+private fun SinglePaneWizardLayout(
     currentStep: SetupStep,
     stepContent: @Composable (SetupStep) -> Unit
 ) {
-    Column(modifier = modifier) {
+    Column(modifier = Modifier.fillMaxSize()) {
         HorizontalStepIndicator(
             currentStep = currentStep,
             modifier = Modifier
@@ -215,19 +217,21 @@ private fun PhoneWizardLayout(
     }
 }
 
-/** 平板双栏：左侧竖向步骤导航 + 右侧可滚动的步骤内容。 */
+/** 宽容器双栏：左侧竖向步骤导航 + 右侧可滚动的步骤内容。 */
 @Composable
-private fun TabletWizardLayout(
-    modifier: Modifier,
+private fun TwoPaneWizardLayout(
     currentStep: SetupStep,
     stepContent: @Composable (SetupStep) -> Unit
 ) {
-    Row(modifier = modifier) {
+    Row(modifier = Modifier.fillMaxSize()) {
+        // 左栏在横屏矮视口下放不下全部步骤（标题区+3 步+连接线 ≈ 340dp），
+        // 与右侧内容一样允许滚动，避免被裁切
         VerticalStepNavigation(
             currentStep = currentStep,
             modifier = Modifier
                 .width(260.dp)
                 .fillMaxHeight()
+                .verticalScroll(rememberScrollState())
         )
         VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         WizardStepHost(

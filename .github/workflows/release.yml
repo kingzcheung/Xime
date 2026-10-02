@@ -25,6 +25,10 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
           cache: 'gradle'
+          cache-dependency-path: |
+            gradle/libs.versions.toml
+            **/*.gradle*
+            **/gradle-wrapper.properties
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
@@ -53,7 +57,7 @@ jobs:
             native-${{ runner.os }}-
 
       - name: Download native deps (ONNX Runtime)
-        run: ./gradlew downloadOnnx --no-daemon
+        run: ./gradlew downloadOnnx --no-daemon --refresh-dependencies
 
       - name: Cache CMake build
         uses: actions/cache@v6
@@ -181,18 +185,33 @@ jobs:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         run: cargo build --release --target ${{ matrix.target }}
 
+      - name: Read xipm version
+        id: xipm_version
+        working-directory: tools/xime-plugin
+        shell: bash
+        run: |
+          # 只取 [package] 段内的 version，避免误读依赖版本
+          VERSION=$(awk -F'"' '/^\[package\]/{p=1;next} /^\[/{p=0} p && /^version *=/{print $2; exit}' Cargo.toml)
+          if [ -z "$VERSION" ]; then
+            echo "::error::无法从 tools/xime-plugin/Cargo.toml 读取 xipm 版本号"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "xipm 版本：$VERSION"
+
       - name: Package artifact
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
+          VERSION: ${{ steps.xipm_version.outputs.version }}
         run: |
           BIN_DIR="tools/xime-plugin/target/$TARGET/release"
           if [ "$RUNNER_OS" = "Windows" ]; then
-            tar.exe -a -c -f "xipm-$TARGET.zip" -C "$BIN_DIR" xipm.exe
+            tar.exe -a -c -f "xipm-$VERSION-$TARGET.zip" -C "$BIN_DIR" xipm.exe
           else
-            tar czf "xipm-$TARGET.tar.gz" -C "$BIN_DIR" xipm
+            tar czf "xipm-$VERSION-$TARGET.tar.gz" -C "$BIN_DIR" xipm
           fi
-          ls -la xipm-$TARGET.*
+          ls -la "xipm-$VERSION-$TARGET".*
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7

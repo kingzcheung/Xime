@@ -78,7 +78,9 @@ data class AsrProvider(
 fun SpeechToTextSettingsContent(
     onBack: () -> Unit,
     onNavigateToPluginSettings: (String) -> Unit = {},
-    onNavigateToPlugins: () -> Unit = {}
+    onNavigateToPlugins: () -> Unit = {},
+    /** 跳转扩展商店的模型页（本地模型未安装时，模型卡片的去下载去处）。 */
+    onNavigateToModelMarket: () -> Unit = {}
 ) {
     val context = LocalContext.current
 
@@ -235,7 +237,7 @@ fun SpeechToTextSettingsContent(
                     Spacer(modifier = Modifier.height(8.dp))
 
                     // 本地模型下载/管理卡片（内部 fillMaxSize 自滚动，须放在本分支最后）
-                    OfflineAsrSettings.ModelSection()
+                    OfflineAsrSettings.ModelSection(onNavigateToDownload = onNavigateToModelMarket)
                 }
             }
 

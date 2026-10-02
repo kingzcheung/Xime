@@ -31,6 +31,10 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
           cache: 'gradle'
+          cache-dependency-path: |
+            gradle/libs.versions.toml
+            **/*.gradle*
+            **/gradle-wrapper.properties
           
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
@@ -58,7 +62,7 @@ jobs:
             native-${{ runner.os }}-
 
       - name: Download native deps (ONNX Runtime)
-        run: ./gradlew downloadOnnx --no-daemon
+        run: ./gradlew downloadOnnx --no-daemon --refresh-dependencies
 
       - name: Cache CMake build
         uses: actions/cache@v6
@@ -133,6 +137,10 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
           cache: 'gradle'
+          cache-dependency-path: |
+            gradle/libs.versions.toml
+            **/*.gradle*
+            **/gradle-wrapper.properties
           
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
@@ -150,7 +158,7 @@ jobs:
           sudo apt-get install -y cmake ninja-build
 
       - name: Download native deps (ONNX Runtime)
-        run: ./gradlew downloadOnnx --no-daemon
+        run: ./gradlew downloadOnnx --no-daemon --refresh-dependencies
 
       - name: Enable KVM group perms
         run: |
