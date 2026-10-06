@@ -8,6 +8,7 @@ import com.kingzcheung.xime.model.ModelDownloadState
 import com.kingzcheung.xime.model.ModelInfo
 import com.kingzcheung.xime.model.ModelManager
 import com.kingzcheung.xime.model.ModelVersion
+import com.kingzcheung.xime.settings.MarketUpdateChecker
 import com.kingzcheung.xime.settings.MarketVersionStore
 import com.kingzcheung.xime.util.FileLogger
 import kotlinx.coroutines.Dispatchers
@@ -185,6 +186,8 @@ class ModelManagementViewModel(application: Application) : AndroidViewModel(appl
                 }
                 if (downloaded) {
                     _uiState.update { s -> s.copy(toastMessage = "模型下载完成") }
+                    // 下载/更新成功立即重算可更新计数（Tab 角标与设置主页角标实时刷新）
+                    MarketUpdateChecker.refreshNow(context)
                 }
             }
         }
@@ -206,6 +209,8 @@ class ModelManagementViewModel(application: Application) : AndroidViewModel(appl
                     }
                 }
                 _uiState.update { s -> s.copy(toastMessage = "模型已删除") }
+                // 删除后该项不再计入可更新，立即重算角标
+                MarketUpdateChecker.refreshNow(context)
             }
         }
     }

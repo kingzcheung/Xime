@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.kingzcheung.xime.plugin.core.runtime.PluginManager
 import com.kingzcheung.xime.rime.RimeConfigHelper
 import com.kingzcheung.xime.rime.RimeEngine
+import com.kingzcheung.xime.settings.MarketUpdateChecker
 import com.kingzcheung.xime.settings.FileConflictInfo
 import com.kingzcheung.xime.settings.ImportManager
 import com.kingzcheung.xime.settings.KeysConfigHelper
@@ -179,6 +180,8 @@ class SchemaSettingsViewModel(application: Application) : AndroidViewModel(appli
             refresh()
             loadMarketPackages()
             showToast("已卸载")
+            // 卸载后该项不再计入可更新，立即重算角标
+            MarketUpdateChecker.refreshNow(context)
         }
     }
 

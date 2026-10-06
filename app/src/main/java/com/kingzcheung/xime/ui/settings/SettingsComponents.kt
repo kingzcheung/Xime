@@ -84,7 +84,9 @@ fun SettingsItem(
     title: String,
     subtitle: String,
     onClick: () -> Unit,
-    showArrow: Boolean = false
+    showArrow: Boolean = false,
+    /** 行尾更新角标文案（如 "2 项可更新"）：非空时以高亮胶囊展示，优先于箭头前。 */
+    badgeText: String? = null
 ) {
     Row(
         modifier = Modifier
@@ -120,6 +122,20 @@ fun SettingsItem(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+        }
+        if (badgeText != null) {
+            Spacer(modifier = Modifier.width(8.dp))
+            Surface(
+                shape = RoundedCornerShape(50),
+                color = MaterialTheme.colorScheme.errorContainer
+            ) {
+                Text(
+                    text = badgeText,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                )
+            }
         }
         if (showArrow) {
             Icon(

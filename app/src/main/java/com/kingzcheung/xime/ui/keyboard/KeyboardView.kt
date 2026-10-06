@@ -156,8 +156,13 @@ fun KeyboardView(
 
     LaunchedEffect(state.inputSessionId) {
         t9Controller.reset()
-        FileLogger.i("XimeKeyboard", "InputSessionStarted: isAsciiMode=${state.isAsciiMode}, schemaId=${state.currentSchemaId}, kb=$keyboardState, vs=$viewState, page=$page")
-        viewModel.asciiStateMachine.reset()
+        FileLogger.i("XimeKeyboard", "InputSessionStarted: isAsciiMode=${state.isAsciiMode}, schemaId=${state.currentSchemaId}, kb=$keyboardState, vs=$viewState, page=$page, restarting=${state.isInputSessionRestarting}")
+        // restarting（同一编辑框刷新，如聊天发送消息后 app restartInput）不是新会话：
+        // 不清 ascii 记忆——否则"主键盘=中文"的记忆丢失，退出符号/数字面板时
+        // targetFor(MAIN) 会 fallback 到引擎的面板态（面板首入默认英文），主键盘被误留英文。
+        if (!state.isInputSessionRestarting) {
+            viewModel.asciiStateMachine.reset()
+        }
         viewModel.dispatch(
             KeyboardDispatchAction.InputSessionStarted(state.isAsciiMode, state.currentSchemaId)
         )

@@ -49,6 +49,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -60,6 +61,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.kingzcheung.xime.settings.MarketUpdateChecker
 import com.kingzcheung.xime.settings.SettingsPreferences
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.MainScope
@@ -86,7 +89,13 @@ fun SettingsMainContent(
 ) {
     val context = LocalContext.current
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
-    
+
+    // 扩展商店可更新计数：进主页恢复缓存并按节流后台刷新（失败静默），展示在入口角标
+    LaunchedEffect(Unit) {
+        MarketUpdateChecker.maybeRefresh(context)
+    }
+    val marketUpdates by MarketUpdateChecker.summary.collectAsStateWithLifecycle()
+
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         containerColor = MaterialTheme.colorScheme.surface,
@@ -272,7 +281,9 @@ fun SettingsMainContent(
                         title = "扩展商店",
                         subtitle = "下载输入方案 / 模型 / 插件",
                         onClick = onNavigateToMarket,
-                        showArrow = true
+                        showArrow = true,
+                        badgeText = marketUpdates.totalUpdates.takeIf { it > 0 }
+                            ?.let { "$it 项可更新" }
                     )
                     HorizontalDivider(
                         modifier = Modifier.padding(start = 56.dp),

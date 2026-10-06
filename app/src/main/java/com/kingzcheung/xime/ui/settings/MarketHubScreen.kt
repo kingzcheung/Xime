@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.outlined.Gesture
 import androidx.compose.material.icons.outlined.Keyboard
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -98,6 +99,7 @@ import com.kingzcheung.xime.settings.MarketLayoutItem
 import com.kingzcheung.xime.settings.MarketScheme
 import com.kingzcheung.xime.settings.MarketSchemeItem
 import com.kingzcheung.xime.settings.MarketPluginItem
+import com.kingzcheung.xime.settings.MarketUpdateChecker
 import com.kingzcheung.xime.settings.PluginVersion
 import com.kingzcheung.xime.settings.SchemeVersion
 import com.kingzcheung.xime.settings.SettingsPreferences
@@ -128,7 +130,17 @@ fun MarketHubContent(
     onNavigateToModelLocal: () -> Unit = {},
     initialTab: Int = 0,
 ) {
+    val context = LocalContext.current
     var tabIndex by remember { mutableIntStateOf(initialTab) }
+
+    // 逛商店期间可能安装/更新扩展：清除可更新计数的节流时间戳并触发一次刷新，
+    // 返回设置主页时角标会绕过节流强制重算，不残留过期计数
+    LaunchedEffect(Unit) {
+        MarketUpdateChecker.invalidate(context)
+        MarketUpdateChecker.maybeRefresh(context)
+    }
+    // 四个 Tab 的更新角标与设置主页入口角标同源（MarketUpdateChecker 分市场计数）
+    val marketUpdates by MarketUpdateChecker.summary.collectAsStateWithLifecycle()
 
     Scaffold(
         topBar = {
@@ -164,22 +176,38 @@ fun MarketHubContent(
                 Tab(
                     selected = tabIndex == 0,
                     onClick = { tabIndex = 0 },
-                    text = { Text("方案") },
+                    text = {
+                        TabUpdateBadge(count = marketUpdates.schemeUpdates) {
+                            Text("方案")
+                        }
+                    },
                 )
                 Tab(
                     selected = tabIndex == 1,
                     onClick = { tabIndex = 1 },
-                    text = { Text("模型") },
+                    text = {
+                        TabUpdateBadge(count = marketUpdates.modelUpdates) {
+                            Text("模型")
+                        }
+                    },
                 )
                 Tab(
                     selected = tabIndex == 2,
                     onClick = { tabIndex = 2 },
-                    text = { Text("插件") },
+                    text = {
+                        TabUpdateBadge(count = marketUpdates.pluginUpdates) {
+                            Text("插件")
+                        }
+                    },
                 )
                 Tab(
                     selected = tabIndex == 3,
                     onClick = { tabIndex = 3 },
-                    text = { Text("布局") },
+                    text = {
+                        TabUpdateBadge(count = marketUpdates.layoutUpdates) {
+                            Text("布局")
+                        }
+                    },
                 )
             }
             when (tabIndex) {
@@ -403,8 +431,9 @@ private fun SchemeTrailingButton(
             onClick = onUpdate,
             shape = RoundedCornerShape(50),
             colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
+                // 更新按钮用第三色与「获取」的主色区分，便于一眼定位可更新项
+                containerColor = MaterialTheme.colorScheme.tertiary,
+                contentColor = MaterialTheme.colorScheme.onTertiary,
             ),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
         ) {
@@ -628,8 +657,9 @@ private fun ModelTrailingButton(
                     onClick = onDownload,
                     shape = RoundedCornerShape(50),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                        // 更新按钮用第三色与「获取」的主色区分，便于一眼定位可更新项
+                        containerColor = MaterialTheme.colorScheme.tertiary,
+                        contentColor = MaterialTheme.colorScheme.onTertiary,
                     ),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
                 ) {
@@ -847,8 +877,9 @@ private fun PluginTrailingButton(
             onClick = onDownload,
             shape = RoundedCornerShape(50),
             colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
+                // 更新按钮用第三色与「获取」的主色区分，便于一眼定位可更新项
+                containerColor = MaterialTheme.colorScheme.tertiary,
+                contentColor = MaterialTheme.colorScheme.onTertiary,
             ),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
         ) {
@@ -891,6 +922,29 @@ private fun PluginTrailingButton(
 }
 
 /* ------------------------- 通用商店卡片 & 组件 ------------------------- */
+
+/**
+ * Tab 文字的更新角标：count > 0 时在文字右侧显示红色数字徽标（M3 Badge），
+ * 告知用户该分类下有多少项可更新。横排占位而非 BadgedBox 叠加——Tab 的
+ * text 区域是紧凑单行文本，叠加式角标会压在文字上；count == 0 时不渲染。
+ */
+@Composable
+private fun TabUpdateBadge(count: Int, content: @Composable () -> Unit) {
+    if (count <= 0) {
+        content()
+        return
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        content()
+        Spacer(Modifier.width(5.dp))
+        Badge {
+            Text(
+                text = if (count > 99) "99+" else "$count",
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
+    }
+}
 
 /**
  * 商店式卡片（M3）：surfaceContainerLow 分层 + 大圆角；图标块用容器色；
@@ -2276,8 +2330,9 @@ private fun PluginVersionDownloadButton(
             onClick = onDownload,
             shape = RoundedCornerShape(12.dp),
             colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
+                // 更新按钮用第三色与「下载」的主色区分，便于一眼定位可更新项
+                containerColor = MaterialTheme.colorScheme.tertiary,
+                contentColor = MaterialTheme.colorScheme.onTertiary,
             ),
             contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
         ) {

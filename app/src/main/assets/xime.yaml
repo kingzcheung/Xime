@@ -500,7 +500,7 @@ keyboard:
       # shift：单击切单击态、双击锁定大写；命令值走键盘按键路由（shift_single / shift_caps）
       shift: { width: 1.4, tap: { action: command, value: shift_single }, double_tap: { action: command, value: shift_caps } }
       # delete：单击删除、长按重复删、上滑清空、下滑撤回、左右滑清空输入
-      delete: { width: 1.4, tap: { action: delete }, long_press: { values: [ { action: delete, repeat: true } ] }, swipe_up: { action: clear_all, label: "上滑清空" }, swipe_down: { action: undo_clear, label: "下滑撤回" }, swipe_left: { action: command, value: clear_composition }, swipe_right: { action: command, value: clear_composition } }
+      delete: { width: 1.4, tap: { action: delete }, long_press: { values: [ { action: delete, label: "删除" } ] }, swipe_up: { action: clear_all, label: "上滑清空" }, swipe_down: { action: undo_clear, label: "下滑撤回" }, swipe_left: { action: command, value: clear_composition }, swipe_right: { action: command, value: clear_composition } }
       # ── 第四行功能键（位置/是否出现由上方 layout.rows 第四行决定；行为在此定义）──
       # ?123：单击切面板，长按弹出「数字 / 常用符号」（命令值走键盘按键路由）
       mode_change: { width: 1.2, tap: { action: command, value: mode_change }, long_press: { display: bubble, values: [ { label: number, action: command, value: mode_change_number }, { label: common_symbol, action: command, value: mode_change_common_symbol } ] } }
@@ -562,7 +562,7 @@ keyboard:
       # shift：单击切单击态、双击锁定大写（命令值走键盘按键路由）
       shift: { width: 1.4, tap: { action: command, value: shift_single }, double_tap: { action: command, value: shift_caps } }
       # delete：单击删除、长按重复删、上滑清空、下滑撤回、左右滑清空输入
-      delete: { width: 1.4, tap: { action: delete }, long_press: { values: [ { action: delete, repeat: true } ] }, swipe_up: { action: clear_all, label: "上滑清空" }, swipe_down: { action: undo_clear, label: "下滑撤回" }, swipe_left: { action: command, value: clear_composition }, swipe_right: { action: command, value: clear_composition } }
+      delete: { width: 1.4, tap: { action: delete }, long_press: { values: [ { action: delete, label: "删除" } ] }, swipe_up: { action: clear_all, label: "上滑清空" }, swipe_down: { action: undo_clear, label: "下滑撤回" }, swipe_left: { action: command, value: clear_composition }, swipe_right: { action: command, value: clear_composition } }
       # ?123：单击切面板，长按弹出「数字 / 常用符号」
       mode_change: { width: 1.2, tap: { action: command, value: mode_change }, long_press: { display: bubble, values: [ { label: number, action: command, value: mode_change_number }, { label: common_symbol, action: command, value: mode_change_common_symbol } ] } }
       # 空格键：单击上屏空格；长按进入语音输入（含麦克风权限校验）
@@ -742,6 +742,9 @@ keyboard:
       "7": { tap: { label: "PQRS" }, long_press: { display: "bubble", values: ["P", "Q", "R", "S"] }, swipe_up: { value: "7", display: "key", bubble: false } }
       "8": { tap: { label: "TUV" }, long_press: { display: "bubble", values: ["T", "U", "V"] }, swipe_up: { value: "8", display: "key", bubble: false } }
       "9": { tap: { label: "WXYZ" }, long_press: { display: "bubble", values: ["W", "X", "Y", "Z"] }, swipe_up: { value: "9", display: "key", bubble: false } }
+      # 空格上滑直接输入 0（不经九键组合，与数字键上滑同路径）；
+      # 功能键也可按此方式配置手势（space/earth/delete/clear/enter 等）
+      space: { swipe_up: { value: "0", display: "key", bubble: false } }
 
   # 笔画键盘配置
   # 注意：本键盘不支持 button_layout（按键布局模式），固定 standard 键面布局；
@@ -761,18 +764,21 @@ keyboard:
     # 键 id 为键面标签；内置默认：上滑输入对应数字（与历史行为一致，此前版本该手势
     # 因缺少滑动提示文本实际不触发，现修复生效），下滑可按需绑定编辑动作。
     # display：key（画在键面）/ bubble（不画键面，留给气泡）/ both；bubble 独立控制
-    # 运行时是否弹气泡（默认 true）。内置上滑 display: "key" + bubble: false（不弹气泡，
-    # 数字提示由键面角标承担）；想要拖动气泡自行改为 bubble: true。手势功能与提示相互独立。
+    # 运行时是否弹气泡（默认 true）。上滑内置 display: "key" + bubble: false（不弹气泡，
+    # 数字提示由键面角标承担）；tap 内置 bubble: false（按压不弹预览气泡，与九键拼音
+    # 键盘的无气泡交互对齐）。手势功能与提示相互独立。
     keys:
-      "一": { swipe_up: { value: "1", display: "key", bubble: false } }
-      "丨": { swipe_up: { value: "2", display: "key", bubble: false } }
-      "丿": { swipe_up: { value: "3", display: "key", bubble: false } }
-      "丶": { swipe_up: { value: "4", display: "key", bubble: false } }
-      "乛": { swipe_up: { value: "5", display: "key", bubble: false } }
-      "*": { swipe_up: { value: "6", display: "key", bubble: false } }
-      "分词": { swipe_up: { value: "7", display: "key", bubble: false } }
-      "，": { swipe_up: { value: "8", display: "key", bubble: false } }
-      "英": { swipe_up: { value: "9", display: "key", bubble: false } }
+      "一": { tap: { bubble: false }, swipe_up: { value: "1", display: "key", bubble: false } }
+      "丨": { tap: { bubble: false }, swipe_up: { value: "2", display: "key", bubble: false } }
+      "丿": { tap: { bubble: false }, swipe_up: { value: "3", display: "key", bubble: false } }
+      "丶": { tap: { bubble: false }, swipe_up: { value: "4", display: "key", bubble: false } }
+      "乛": { tap: { bubble: false }, swipe_up: { value: "5", display: "key", bubble: false } }
+      "*": { tap: { bubble: false }, swipe_up: { value: "6", display: "key", bubble: false } }
+      "分词": { tap: { bubble: false }, swipe_up: { value: "7", display: "key", bubble: false } }
+      "，": { tap: { bubble: false }, swipe_up: { value: "8", display: "key", bubble: false } }
+      "英": { tap: { bubble: false }, swipe_up: { value: "9", display: "key", bubble: false } }
+      # 空格上滑直接输入 0（与笔画键上滑同路径，直接上屏）
+      space: { swipe_up: { value: "0", display: "key", bubble: false } }
 
   # 手写键盘配置
   # schemas 声明使用手写布局的方案：手写不经过 rime 引擎（由 HandwritingEngine

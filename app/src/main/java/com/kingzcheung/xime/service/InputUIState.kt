@@ -41,6 +41,8 @@ data class InputUIState(
     val isDeploying: Boolean = false,
     val deploymentMessage: String = "",
     val inputSessionId: Long = 0,
+    /** 本次 inputSessionId 变化是否为 restarting（同一编辑框刷新）：键盘 UI 据此跳过 ascii 记忆 reset。 */
+    val isInputSessionRestarting: Boolean = false,
     val t9ResetSignal: Long = 0,
     val swipeCancelEpoch: Long = 0,
     val t9RightCandidateSelectedCount: Long = 0,

@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kingzcheung.xime.BuildConfig
 import com.kingzcheung.xime.settings.KeysConfigHelper
+import com.kingzcheung.xime.settings.MarketUpdateChecker
 import com.kingzcheung.xime.settings.MarketLayoutItem
 import com.kingzcheung.xime.settings.SchemaManager
 import com.kingzcheung.xime.settings.SettingsPreferences
@@ -145,6 +146,7 @@ class LayoutMarketViewModel(application: Application) : AndroidViewModel(applica
             if (result.success) {
                 SettingsPreferences.setAppliedLayout(context, layout.id, targetVersion, result.files)
                 reloadKeyboardConfig()
+                MarketUpdateChecker.refreshNow(context)
                 _uiState.update { state ->
                     state.copy(
                         installingId = null,
@@ -179,6 +181,8 @@ class LayoutMarketViewModel(application: Application) : AndroidViewModel(applica
             withContext(Dispatchers.IO) { XimeIndexSource.resetLayout(context, files) }
             SettingsPreferences.clearAppliedLayout(context)
             reloadKeyboardConfig()
+            // 恢复默认后原布局不再计入可更新，立即重算角标
+            MarketUpdateChecker.refreshNow(context)
             _uiState.update { state ->
                 state.copy(
                     installingId = null,

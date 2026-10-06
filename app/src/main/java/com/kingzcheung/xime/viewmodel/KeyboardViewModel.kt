@@ -77,6 +77,10 @@ data class KeyboardUiState(
     val toolbarPluginButtons: List<ToolbarButtonItem.Plugin> = emptyList(),
     val isCalculatorMode: Boolean = false,
     val inputSessionId: Long = 0L,
+    /** 本次 inputSessionId 变化是否为 restarting（同一编辑框刷新，如发送消息后 app restartInput）：
+     *  restarting 不是新会话，KeyboardView 据此跳过 ascii 记忆状态机 reset（记忆被清会导致
+     *  退出面板时 fallback 到引擎的面板态，主键盘被误留英文）。 */
+    val isInputSessionRestarting: Boolean = false,
     val isFloatingMode: Boolean = false,
     val isHandwritingMode: Boolean = false,
     val floatingOffsetX: Int = 0,

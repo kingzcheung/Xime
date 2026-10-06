@@ -2,6 +2,7 @@ package com.kingzcheung.xime.ui.keyboard
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -550,6 +551,9 @@ private fun StrokeKeyboardContent(
                     shadowShapeRadius = shadowShapeRadius,
                     fontSize = ctrlFontSize,
                 )
+                // 空格上滑（keyboard.stroke.keys.space.swipe_up，内置配置为直接输入 "0"）：
+                // 与笔画键上滑同路径（直接上屏，不经 rime 组合）
+                val spaceSwipe = KeysConfigHelper.getStrokeKeyGesture("space")?.swipeUp
                 StrokeSpaceButton(
                     onKeyPress = onKeyPress,
                     onKeyPressDown = onKeyPressDown,
@@ -559,6 +563,9 @@ private fun StrokeKeyboardContent(
                     shadowEnabled = shadowEnabled,
                     shadowElevation = shadowElevation,
                     shadowShapeRadius = shadowShapeRadius,
+                    onSwipeUp = swipeHandlerFor(spaceSwipe, onKeyPress, onGestureAction),
+                    swipeUpBadge = if (hintsActive && spaceSwipe?.display != DisplayMode.BUBBLE)
+                        spaceSwipe?.label?.ifEmpty { spaceSwipe?.value } else null,
                 )
                 StrokeSymbolButton(
                     text = ".",
@@ -737,6 +744,10 @@ private fun StrokeDigitKey(
 ) {
     SwipeableKeyButton(
         text = digit,
+        // tap.bubble: false → 不弹按压气泡（默认 true）。与 StrokeKeyItem 同口径：
+        // 配置取自 keyboard.stroke.keys（分词/，/英/* 均在其中），内置已配 bubble: false
+        // （与九键拼音键盘的无气泡交互对齐）。不显式传 pressText 时默认等于 text，必弹气泡。
+        pressText = digit.takeIf { KeysConfigHelper.getStrokeKeyGesture(digit)?.tap?.bubble ?: true },
         onClick = onClick,
         backgroundColor = backgroundColor,
         textColor = textColor,
@@ -867,8 +878,13 @@ private fun StrokeSpaceButton(
     shadowEnabled: Boolean = true,
     shadowElevation: Dp = 1.dp,
     shadowShapeRadius: Dp = 8.dp,
+    /** 上滑动作（keyboard.stroke.keys.space.swipe_up，无配置为 null 不响应滑动）。 */
+    onSwipeUp: (() -> Unit)? = null,
+    /** 上滑键面角标（display: key 时显示，通常为滑动目标字符如 "0"）。 */
+    swipeUpBadge: String? = null,
 ) {
     val density = LocalDensity.current
+    val currentOnSwipeUp by rememberUpdatedState(onSwipeUp)
     val shadowModifier = remember(shadowEnabled, shadowElevation, shadowShapeRadius, density, backgroundColor) {
         if (shadowEnabled) {
             val offsetPx = with(density) { shadowElevation.toPx() }
@@ -897,6 +913,26 @@ private fun StrokeSpaceButton(
                     },
                     onTap = { onKeyPress("space") },
                 )
+            }
+            .pointerInput(onSwipeUp) {
+                // 空格上滑（如直接输入数字 0）：纵向拖动超阈值触发一次。
+                // 与 detectTapGestures 共存：拖动时 tap 自动取消，点击不受影响；
+                // 仅在已触发后消费事件，不干扰横向光标手势。
+                if (onSwipeUp == null) return@pointerInput
+                var totalY = 0f
+                var triggered = false
+                val thresholdPx = 50.dp.toPx()
+                detectVerticalDragGestures(
+                    onDragStart = { totalY = 0f; triggered = false },
+                    onVerticalDrag = { change, dragAmount ->
+                        totalY += dragAmount
+                        if (!triggered && totalY < -thresholdPx) {
+                            triggered = true
+                            currentOnSwipeUp?.invoke()
+                        }
+                        if (triggered) change.consume()
+                    },
+                )
             },
         contentAlignment = Alignment.Center
     ) {
@@ -916,5 +952,19 @@ private fun StrokeSpaceButton(
             maxLines = 1,
             fontFamily = AppFonts.keyFontFamily
         )
+        // 上滑手势键面角标（如 "0"）：与数字键上滑数字提示（swipeUpKeyLabel）同位同样式
+        if (swipeUpBadge != null) {
+            Text(
+                text = swipeUpBadge,
+                color = textColor.copy(alpha = 0.6f),
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                lineHeight = 1.sp,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 4.dp, end = 4.dp)
+            )
+        }
     }
 }

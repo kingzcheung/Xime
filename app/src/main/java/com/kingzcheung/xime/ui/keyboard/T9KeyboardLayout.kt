@@ -8,6 +8,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -676,15 +677,23 @@ private fun T9KeyboardContent(
                 shadowElevation = shadowElevation,
                 shadowShapeRadius = shadowShapeRadius,
             )
-            "space" -> T9SpaceKey(
-                schemaName = uiState.schemaName, isSttEnabled = uiState.isSttEnabled,
-                voiceSticky = uiState.voiceSticky,
-                onKeyPress = onKeyPress, onKeyPressDown = onKeyPressDown,
-                onVoiceModeChange = callbacks.onVoiceModeChange,
-                backgroundColor = keyBackgroundColor, textColor = keyTextColor,
-                modifier = modifier,
-                shadowEnabled = shadowEnabled, shadowElevation = shadowElevation, shadowShapeRadius = shadowShapeRadius,
-            )
+            "space" -> {
+                // 空格上滑（keyboard.t9.keys.space.swipe_up，内置配置为直接输入 "0"）：
+                // commitDirect 直接上屏（与数字键上滑同路径，不经 T9 数字组合）
+                val spaceSwipe = KeysConfigHelper.getT9KeyGesture("space")?.swipeUp
+                T9SpaceKey(
+                    schemaName = uiState.schemaName, isSttEnabled = uiState.isSttEnabled,
+                    voiceSticky = uiState.voiceSticky,
+                    onKeyPress = onKeyPress, onKeyPressDown = onKeyPressDown,
+                    onVoiceModeChange = callbacks.onVoiceModeChange,
+                    backgroundColor = keyBackgroundColor, textColor = keyTextColor,
+                    modifier = modifier,
+                    shadowEnabled = shadowEnabled, shadowElevation = shadowElevation, shadowShapeRadius = shadowShapeRadius,
+                    onSwipeUp = swipeHandlerFor(spaceSwipe, commitDirect, callbacks.onGestureAction),
+                    swipeUpBadge = if (hintsActive && spaceSwipe?.display != DisplayMode.BUBBLE)
+                        spaceSwipe?.label?.ifEmpty { spaceSwipe?.value } else null,
+                )
+            }
             "earth" -> IconKeyButton(
                 icon = rememberVectorPainter(Icons.Default.Language),
                 onClick = { onKeyPress("ime_switch") },
@@ -1080,11 +1089,16 @@ private fun T9SpaceKey(
     shadowEnabled: Boolean = true,
     shadowElevation: Dp = 1.dp,
     shadowShapeRadius: Dp = 8.dp,
+    /** 上滑动作（keyboard.t9.keys.space.swipe_up，无配置为 null 不响应滑动）。 */
+    onSwipeUp: (() -> Unit)? = null,
+    /** 上滑键面角标（display: key 时显示，通常为滑动目标字符如 "0"）。 */
+    swipeUpBadge: String? = null,
 ) {
     val context = LocalContext.current
     val view = LocalView.current
     val currentOnKeyPress by rememberUpdatedState(onKeyPress)
     val currentOnVoiceModeChange by rememberUpdatedState(onVoiceModeChange)
+    val currentOnSwipeUp by rememberUpdatedState(onSwipeUp)
     val density = LocalDensity.current
     val spaceShadowModifier = remember(shadowEnabled, shadowElevation, shadowShapeRadius, density, backgroundColor) {
         if (shadowEnabled) {
@@ -1133,6 +1147,26 @@ private fun T9SpaceKey(
                             currentOnVoiceModeChange?.invoke(true)
                         }
                     }
+                )
+            }
+            .pointerInput(voiceSticky, onSwipeUp) {
+                // 空格上滑（如直接输入数字 0）：纵向拖动超阈值触发一次。
+                // 与 detectTapGestures 共存：拖动时 tap 自动取消，点击/长按语音不受影响；
+                // 语音常驻态（轻触结束语音）不响应上滑。仅在已触发后消费事件，不干扰横向光标手势。
+                if (onSwipeUp == null || voiceSticky) return@pointerInput
+                var totalY = 0f
+                var triggered = false
+                val thresholdPx = 50.dp.toPx()
+                detectVerticalDragGestures(
+                    onDragStart = { totalY = 0f; triggered = false },
+                    onVerticalDrag = { change, dragAmount ->
+                        totalY += dragAmount
+                        if (!triggered && totalY < -thresholdPx) {
+                            triggered = true
+                            currentOnSwipeUp?.invoke()
+                        }
+                        if (triggered) change.consume()
+                    },
                 )
             }, contentAlignment = Alignment.Center
     ) {
@@ -1186,6 +1220,20 @@ private fun T9SpaceKey(
                     modifier = Modifier
                         .align(Alignment.BottomStart)
                         .padding(start = 6.dp, bottom = 2.dp)
+                )
+            }
+            // 上滑手势键面角标（如 "0"）：与数字键上滑数字提示（swipeUpKeyLabel）同位同样式
+            if (swipeUpBadge != null) {
+                Text(
+                    text = swipeUpBadge,
+                    color = textColor.copy(alpha = 0.6f),
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    lineHeight = 1.sp,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 4.dp, end = 4.dp)
                 )
             }
         }

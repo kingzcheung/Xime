@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.kingzcheung.xime.BuildConfig
 import com.kingzcheung.xime.settings.FileConflictInfo
 import com.kingzcheung.xime.settings.MarketSchemeItem
+import com.kingzcheung.xime.settings.MarketUpdateChecker
 import com.kingzcheung.xime.settings.MarketVersionStore
 import com.kingzcheung.xime.settings.SchemaManager
 import com.kingzcheung.xime.settings.XimeIndexSource
@@ -219,6 +220,8 @@ class SchemaMarketViewModel(application: Application) : AndroidViewModel(applica
                 else -> "已下载「${item.scheme.name}」"
             }
             showToast(toast)
+            // 下载成功立即重算可更新计数（Tab 角标与设置主页角标实时刷新）
+            if (result.success) MarketUpdateChecker.refreshNow(context)
         }
     }
 
@@ -286,6 +289,7 @@ class SchemaMarketViewModel(application: Application) : AndroidViewModel(applica
                     }
                 }
                 showToast(msg)
+                MarketUpdateChecker.refreshNow(context)
             } else if (install.conflicts.isNotEmpty()) {
                 // 文件冲突：弹对话框展示明细，不再走一行 Toast
                 _uiState.update { st ->

@@ -266,6 +266,8 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
     /** 左右 inset（px）：手机上键盘内容避让挖孔/横屏导航栏，平板不做避让（候选栏按钮靠边）。 */
     private val horizontalInsetPxState = mutableStateOf(0 to 0)
     private var hasHardwareKeyboard = false
+    /** 物理 Shift 按下到抬起之间是否有其他按键（组合输入大写等），抬起时据此决定是否切换中英文。 */
+    private var shiftComboDetected = false
     /** 当前输入框是否受限（密码/终端/NO_SUGGESTIONS，见 EditorInfoClassifier）。
      *  主线程写（onStartInput）、key-processing 线程读（英文联想短路），volatile 保证可见性。 */
     @Volatile
@@ -1647,6 +1649,7 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
                                     toolbarPluginButtons = state.toolbarPluginButtons,
                                     isCalculatorMode = calculatorEngine.isActive(),
                                     inputSessionId = state.inputSessionId,
+                                    isInputSessionRestarting = state.isInputSessionRestarting,
                                     isFloatingMode = state.isFloatingMode,
                                     isHandwritingMode = isHandwritingMode,
                                     floatingOffsetX = state.floatingOffsetX,
@@ -1874,6 +1877,32 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         val e = event ?: return super.onKeyDown(keyCode, event)
+        // 物理 Shift 单击切中英文的组合检测：Shift 按下重置标记，期间任何其他键按下即视为组合
+        // （如 Shift+字母大写），抬起时不再触发切换。
+        if (isShiftKeyCode(keyCode)) {
+            if (e.repeatCount == 0) shiftComboDetected = false
+        } else {
+            shiftComboDetected = true
+        }
+        // Ctrl 编辑快捷键（复制/剪切/粘贴/全选/撤销）：必须在 rime 路由之前拦截，
+        // 否则字母会被当作拼音吞掉（如 Ctrl+C 变成向引擎输入 c，复制失效）。
+        // 执行链路与软键盘工具栏按钮一致（performEditorMenuAction）。
+        if (e.isCtrlPressed) {
+            val actionId = when (keyCode) {
+                KeyEvent.KEYCODE_C -> android.R.id.copy
+                KeyEvent.KEYCODE_X -> android.R.id.cut
+                KeyEvent.KEYCODE_V -> android.R.id.paste
+                KeyEvent.KEYCODE_A -> android.R.id.selectAll
+                KeyEvent.KEYCODE_Z -> android.R.id.undo
+                else -> 0
+            }
+            if (actionId != 0) {
+                performEditorMenuAction(actionId)
+                return true
+            }
+            // 其余 Ctrl 组合（Ctrl+方向键词移动、Ctrl+Shift 系列等）交还系统与目标应用处理
+            return super.onKeyDown(keyCode, event)
+        }
         if (hasHardwareKeyboard && candidateState.value.candidates.isNotEmpty()) {
             when (keyCode) {
                 KeyEvent.KEYCODE_DPAD_DOWN -> {
@@ -1916,13 +1945,25 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
                 KeyEvent.KEYCODE_0 -> { keyRouter.selectCandidate(9); highlightIndex.intValue = 0; return true }
             }
         }
-        val isShifted = e.isShiftPressed
+        // Caps Lock 的 meta state 由系统自动维护，与 Shift 同效（物理键盘大小写切换）
+        val isShifted = e.isShiftPressed || e.isCapsLockOn
         val key = keyCodeToKey(keyCode, isShifted)
         if (key != null) {
             keyRouter.handleKeyPress(key, isShifted)
             return true
         }
         return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+        // 物理 Shift 单击（按下到抬起间无其他按键）切换中英文，与 PC 中文输入法习惯一致；
+        // 复用软键盘 earth 键的 ime_switch 链路（USER_TOGGLE，会话级不持久化）。
+        // 组合使用（Shift+字母等）时放行 super，不触发切换。
+        if (isShiftKeyCode(keyCode) && !shiftComboDetected) {
+            dispatchKey("ime_switch")
+            return true
+        }
+        return super.onKeyUp(keyCode, event)
     }
 
     override fun sendKeyEvent(keyCode: Int) {
@@ -1991,10 +2032,12 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
         t9PartialSegments.clear()
         debugLog("onStartInput: cleared lastCommittedText")
 
-        // 跨进程同步文件日志开关（开关在主进程设置页切换）
-        FileLogger.setVerboseLoggingEnabled(
-            SettingsPreferences.isVerboseLoggingEnabled(this)
-        )
+        // 跨进程同步文件日志开关（开关在主进程设置页切换）。
+        // 同步到 native：控制 rime JNI 的按键/候选 logcat 日志（tag XimeRime），
+        // postRimeJob 在 key-processing 线程执行，避免主线程等 rimeLock。
+        val verboseLogging = SettingsPreferences.isVerboseLoggingEnabled(this)
+        FileLogger.setVerboseLoggingEnabled(verboseLogging)
+        keyRouter.postRimeJob { rimeEngine.setVerboseLogging(verboseLogging) }
         
         if (RimeEngine.isInitialized()) {
             // 部署/全量编译进行中：不执行 schema 切换（switchSchema 会等待 rimeLock，
@@ -2077,6 +2120,7 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
 
         uiState.value = uiState.value.copy(
             inputSessionId = System.nanoTime(),
+            isInputSessionRestarting = restarting,
             isSttEnabled = SettingsPreferences.isSttEnabled(this@XimeInputMethodService),
         )
 
