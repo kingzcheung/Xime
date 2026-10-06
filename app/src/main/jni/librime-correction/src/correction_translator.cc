@@ -220,12 +220,16 @@ CorrectionTranslator::CorrectionTranslator(const Ticket& ticket)
     config->GetBool(cfg_ns + "/enable", &config_.enable);
     config->GetString(cfg_ns + "/mode", &config_.mode);
     double lambda = config_.lambda, margin = config_.margin, min_off = config_.min_off;
+    double cross_row_penalty = config_.cross_row_penalty;
     config->GetDouble(cfg_ns + "/lambda", &lambda);
     config->GetDouble(cfg_ns + "/margin", &margin);
     config->GetDouble(cfg_ns + "/min_off", &min_off);
+    config->GetDouble(cfg_ns + "/cross_row_penalty", &cross_row_penalty);
     config_.lambda = static_cast<float>(lambda);
     config_.margin = static_cast<float>(margin);
     config_.min_off = static_cast<float>(min_off);
+    config_.cross_row_penalty = static_cast<float>(cross_row_penalty);
+    config->GetBool(cfg_ns + "/prefix_geo_gate", &config_.prefix_geo_gate);
     config->GetInt(cfg_ns + "/max_candidates", &config_.max_candidates);
     config->GetInt(cfg_ns + "/min_code_length", &config_.min_code_length);
   }
@@ -357,11 +361,15 @@ an<Translation> CorrectionTranslator::Query(const string& input,
   };
 
   const float base = score(code);
+  // 前缀态判定（见 CorrectionConfig::prefix_geo_gate 注释）
+  const ExactLookup base_lk = lookup(code);
+  const bool base_prefix_only = !base_lk.has_entry && base_lk.lang_weight == -6.0f;
 
   // 3) 触发判定：增益 ≥ margin，且（可选）偏移幅度足够（按得准就不纠）
   std::vector<std::pair<float, const std::string*>> hits;
   const std::string* top_v = nullptr;  // 排障：全量最优候选（无论是否达 margin）
   float top_gain = -1e9f;
+  bool top_gated = false;
   for (size_t k = 1; k < cands.size(); ++k) {
     const std::string& v = cands[k];
     int diff_pos = -1;
@@ -379,12 +387,29 @@ an<Translation> CorrectionTranslator::Query(const string& input,
       if (mag < config_.min_off)
         continue;
     }
-    const float gain = score(v) - base;
+    float gain = score(v) - base;
+    // 跨行方向先验：真实误触以同行为主（TSI 实测 81%），信道对纵向偏移的
+    // 响应更陡，跨行候选被系统性高估——量级与依据见 CorrectionConfig 注释
+    if (config_.cross_row_penalty != 0.0f) {
+      const int oi = LetterIndex(code[diff_pos]);
+      const int ni = LetterIndex(v[diff_pos]);
+      if (oi >= 0 && ni >= 0 && !correction::SameRow(oi, ni))
+        gain += config_.cross_row_penalty;
+    }
+    // 前缀态几何门：用户按对了的继续打字不该被"邻码生僻词"打扰
+    bool gated = false;
+    if (config_.prefix_geo_gate && base_prefix_only) {
+      float geo_gain = 0.0f;
+      for (int i = 0; i < L; ++i)
+        geo_gain += geo_logp(i, v[i]) - geo_logp(i, code[i]);
+      gated = geo_gain <= 0.0f;
+    }
     if (gain > top_gain) {
       top_gain = gain;
       top_v = &cands[k];
+      top_gated = gated;
     }
-    if (gain >= config_.margin)
+    if (!gated && gain >= config_.margin)
       hits.emplace_back(gain, &cands[k]);
   }
   if (hits.empty()) {
@@ -411,6 +436,8 @@ an<Translation> CorrectionTranslator::Query(const string& input,
                " p_top=" + std::to_string(probs[base_idx + LetterIndex((*top_v)[dp])]);
       }
     }
+    if (top_gated)
+      msg += " top_gated=1";
     EmitLog(msg);
     return nullptr;
   }

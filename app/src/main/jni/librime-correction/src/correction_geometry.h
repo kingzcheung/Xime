@@ -15,7 +15,7 @@
 namespace rime {
 namespace correction {
 
-// 键心（归一化：x/键盘宽，y/键盘高）与键尺寸，取实测键盘几何（jiucuo/data/layout.json）
+// 键心（归一化：x/键盘宽，y/按键区高）与键尺寸，取实测键盘几何（jiucuo/data/layout.json）
 struct KeyGeom {
   float x, y;
 };
@@ -25,6 +25,11 @@ extern const std::array<KeyGeom, 26> kKeyCenters;
 constexpr float kKeyW = 0.0881f;
 constexpr float kKeyH = 0.2195f;
 constexpr float kNeighborRadius = 1.35f;  // 邻键半径（键宽/高为单位）
+constexpr float kRowPitch = 0.2604f;      // 行距（按键区高归一化，同 layout.json spacing.y）
+
+// 同行判定（行距的一半为界）：用于跨行方向先验（真实误触 81% 同行，见
+// jiucuo 对 TSI 的统计；跨行候选加 cross_row_penalty 抑制）
+bool SameRow(int a, int b);
 
 class NeighborTable {
  public:

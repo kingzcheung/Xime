@@ -57,5 +57,9 @@ float NeighborTable::Distance(int a, int b) const {
   return std::sqrt(dx * dx + dy * dy);
 }
 
+bool SameRow(int a, int b) {
+  return std::fabs(kKeyCenters[a].y - kKeyCenters[b].y) < 0.5f * kRowPitch;
+}
+
 }  // namespace correction
 }  // namespace rime

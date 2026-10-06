@@ -192,6 +192,9 @@ Java_com_kingzcheung_xime_correction_CorrectionNative_nativeEnsureCorrectedSchem
         "  \"correction/mode\": append",
         "  \"correction/lambda\": 1.0",
         "  \"correction/margin\": 2.0",
+        "  \"correction/min_off\": 0.3",
+        "  \"correction/cross_row_penalty\": -0.7",
+        "  \"correction/prefix_geo_gate\": true",
         "  \"correction/max_candidates\": 3",
         "  \"correction/min_code_length\": 2",
     };
