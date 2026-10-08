@@ -355,6 +355,8 @@ private fun T9KeyboardContent(
         val gesture = KeysConfigHelper.getT9KeyGesture(id) ?: return T9KeySwipes()
         val upHint = gesture.swipeUp?.let { it.label.ifEmpty { it.value } }
         val downHint = gesture.swipeDown?.let { it.label.ifEmpty { it.value } }
+        val leftHint = gesture.swipeLeft?.let { it.label.ifEmpty { it.value } }
+        val rightHint = gesture.swipeRight?.let { it.label.ifEmpty { it.value } }
         // display 只管静态键面提示位置（bubble 不画键面，用空串压制回退）；
         // 运行时气泡由 bubble 独立控制。手势回调与二者无关。
         val swipeUpKeyLabel = when {
@@ -367,6 +369,16 @@ private fun T9KeyboardContent(
             gesture.swipeDown?.display == DisplayMode.BUBBLE -> ""
             else -> downHint
         }
+        val swipeLeftKeyLabel = when {
+            !hintsActive -> null
+            gesture.swipeLeft?.display == DisplayMode.BUBBLE -> ""
+            else -> leftHint
+        }
+        val swipeRightKeyLabel = when {
+            !hintsActive -> null
+            gesture.swipeRight?.display == DisplayMode.BUBBLE -> ""
+            else -> rightHint
+        }
         return T9KeySwipes(
             onSwipeUp = swipeHandlerFor(gesture.swipeUp, commitDirect, onGestureAction),
             onSwipeDown = swipeHandlerFor(gesture.swipeDown, commitDirect, onGestureAction),
@@ -376,6 +388,8 @@ private fun T9KeyboardContent(
             swipeDownText = if (hintsActive && (gesture.swipeDown?.bubble ?: true)) downHint else null,
             swipeUpKeyLabel = swipeUpKeyLabel,
             swipeDownKeyLabel = swipeDownKeyLabel,
+            swipeLeftKeyLabel = swipeLeftKeyLabel,
+            swipeRightKeyLabel = swipeRightKeyLabel,
         )
     }
 
@@ -626,6 +640,8 @@ private fun T9KeyboardContent(
             swipeDownText = swipes.swipeDownText,
             swipeUpKeyLabel = swipes.swipeUpKeyLabel,
             swipeDownKeyLabel = swipes.swipeDownKeyLabel,
+            swipeLeftKeyLabel = swipes.swipeLeftKeyLabel,
+            swipeRightKeyLabel = swipes.swipeRightKeyLabel,
             onSwipe = swipes.onSwipeUp?.let { handler -> { _: String -> handler() } },
             onSwipeDown = swipes.onSwipeDown?.let { handler -> { _: String -> handler() } },
             onSwipeLeft = swipes.onSwipeLeft,
@@ -837,6 +853,10 @@ private data class T9KeySwipes(
     /** 上滑键面提示（空串 = 显式不印键面，bubble 模式用；null = 不显示） */
     val swipeUpKeyLabel: String? = null,
     val swipeDownKeyLabel: String? = null,
+    /** 左滑键面提示（空串 = 显式不印键面，bubble 模式用；null = 不显示） */
+    val swipeLeftKeyLabel: String? = null,
+    /** 右滑键面提示（空串 = 显式不印键面，bubble 模式用；null = 不显示） */
+    val swipeRightKeyLabel: String? = null,
 )
 
 /**
@@ -884,6 +904,8 @@ private fun T9DigitKey(
         swipeDownText = currentSwipes.swipeDownText,
         swipeUpKeyLabel = currentSwipes.swipeUpKeyLabel,
         swipeDownKeyLabel = currentSwipes.swipeDownKeyLabel,
+        swipeLeftKeyLabel = currentSwipes.swipeLeftKeyLabel,
+        swipeRightKeyLabel = currentSwipes.swipeRightKeyLabel,
         onSwipe = currentSwipes.onSwipeUp?.let { handler -> { _: String -> handler() } },
         onSwipeDown = currentSwipes.onSwipeDown?.let { handler -> { _: String -> handler() } },
         onSwipeLeft = currentSwipes.onSwipeLeft,
@@ -985,6 +1007,8 @@ private fun NineKeyButton(
         swipeDownText = swipes.swipeDownText,
         swipeUpKeyLabel = swipes.swipeUpKeyLabel,
         swipeDownKeyLabel = swipes.swipeDownKeyLabel,
+        swipeLeftKeyLabel = swipes.swipeLeftKeyLabel,
+        swipeRightKeyLabel = swipes.swipeRightKeyLabel,
         onSwipe = swipes.onSwipeUp?.let { handler -> { _: String -> handler() } },
         onSwipeDown = swipes.onSwipeDown?.let { handler -> { _: String -> handler() } },
         onSwipeLeft = swipes.onSwipeLeft,

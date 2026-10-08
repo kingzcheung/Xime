@@ -451,6 +451,10 @@ fun SwipeableKeyButton(
     swipeDownKeyLabel: String? = null,
     /** 上滑文本显示在按键上（气泡则为空，用于 display:bubble） */
     swipeUpKeyLabel: String? = null,
+    /** 左滑键面提示（画在键左缘、垂直居中；空串 = 显式不画，用于 display:bubble） */
+    swipeLeftKeyLabel: String? = null,
+    /** 右滑键面提示（画在键右缘、垂直居中；空串 = 显式不画，用于 display:bubble） */
+    swipeRightKeyLabel: String? = null,
     onSwipe: ((String) -> Unit)? = null,
     onSwipeDown: ((String) -> Unit)? = null,
     /** 左/右滑动作；配置任一后该键横向滑动即接管，自动放弃父层光标手势。 */
@@ -868,23 +872,60 @@ fun SwipeableKeyButton(
                 }
             }
         } else {
-            if (icon != null) {
-                Icon(
-                    painter = icon,
-                    contentDescription = text,
-                    tint = textColor,
-                    modifier = Modifier.size(20.dp)
-                )
+            // 主字符保持居中；左右滑提示放在「键边缘」与「主字符」之间的空档正中。
+            // 用等权重行实现：左空档(weight 1) / 主字符(wrap) / 右空档(weight 1)，
+            // 两侧权重相等 → 主字符仍被顶到正中，提示则各自居中于左右空档。
+            val hasHorizontalHint =
+                !swipeLeftKeyLabel.isNullOrEmpty() || !swipeRightKeyLabel.isNullOrEmpty()
+            val mainContent: @Composable () -> Unit = {
+                if (icon != null) {
+                    Icon(
+                        painter = icon,
+                        contentDescription = text,
+                        tint = textColor,
+                        modifier = Modifier.size(20.dp)
+                    )
+                } else {
+                    Text(
+                        text = text,
+                        color = textColor,
+                        fontSize = ((if (fontSize != androidx.compose.ui.unit.TextUnit.Unspecified) fontSize.value else if (text.length > 2) 14f else 18f) * contentScale).sp,
+                        fontWeight = if (text.length > 2) FontWeight.Medium else FontWeight.Normal,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        fontFamily = keyFontFamily
+                    )
+                }
+            }
+            if (hasHorizontalHint) {
+                Row(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                        if (!swipeLeftKeyLabel.isNullOrEmpty()) {
+                            SwipeSideHint(
+                                text = swipeLeftKeyLabel,
+                                textColor = textColor,
+                                fontSize = effectiveSwipeFontSize,
+                                fontFamily = keyLabelFontFamily,
+                            )
+                        }
+                    }
+                    mainContent()
+                    Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                        if (!swipeRightKeyLabel.isNullOrEmpty()) {
+                            SwipeSideHint(
+                                text = swipeRightKeyLabel,
+                                textColor = textColor,
+                                fontSize = effectiveSwipeFontSize,
+                                fontFamily = keyLabelFontFamily,
+                            )
+                        }
+                    }
+                }
             } else {
-                Text(
-                    text = text,
-                    color = textColor,
-                    fontSize = ((if (fontSize != androidx.compose.ui.unit.TextUnit.Unspecified) fontSize.value else if (text.length > 2) 14f else 18f) * contentScale).sp,
-                    fontWeight = if (text.length > 2) FontWeight.Medium else FontWeight.Normal,
-                    textAlign = TextAlign.Center,
-                    maxLines = 1,
-                    fontFamily = keyFontFamily
-                )
+                mainContent()
             }
 
             // 上滑提示与角标文字相同（如九键/笔画上滑输入键面数字）时不再重复渲染提示，
@@ -938,6 +979,8 @@ fun SwipeableKeyButton(
                 )
             }
 
+            // 左右滑键面提示已随主字符以等权重行渲染（见上），此处不再单独绘制。
+
             if (badgeText != null) {
                 Text(
                     text = badgeText,
@@ -954,6 +997,30 @@ fun SwipeableKeyButton(
             }
         }
     }
+}
+
+/**
+ * 左右滑的键面提示（单行小字）。
+ *
+ * 九键键窄，过长截断为前 3 个字符，避免在空档内挤到主字符。
+ */
+@Composable
+private fun SwipeSideHint(
+    text: String,
+    textColor: Color,
+    fontSize: androidx.compose.ui.unit.TextUnit,
+    fontFamily: androidx.compose.ui.text.font.FontFamily?,
+) {
+    Text(
+        text = if (text.length <= 3) text else text.take(3),
+        color = textColor.copy(alpha = 0.5f),
+        fontSize = fontSize,
+        fontWeight = FontWeight.Normal,
+        textAlign = TextAlign.Center,
+        maxLines = 1,
+        lineHeight = 1.sp,
+        fontFamily = fontFamily,
+    )
 }
 
 @Composable
