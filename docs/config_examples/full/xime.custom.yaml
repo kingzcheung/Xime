@@ -211,14 +211,18 @@ keyboard:
   # ── 九键（T9）键盘手势 ──
   # 键 id 为数字字符串 "1"~"9"；tap/长按选字母为九键核心交互，不在配置范围。
   # 内置默认：上滑直接输入键面数字（显式 display: "key"，仅键面提示、无滑动气泡；
-  # 想要滑动气泡显式写 display: "both"）。下滑内置不绑定动作，可在 xime.custom.yaml
-  # 按键级自行配置（段首/复制/剪贴板面板等）。覆盖时只需写要改的键：
+  # 想要滑动气泡显式写 display: "both"）。下滑/左滑/右滑内置不绑定动作，可在
+  # xime.custom.yaml 按键级自行配置（段首/复制/剪贴板面板/光标移动等）。覆盖时只需写要改的键：
+  # 注意：左右滑默认不绑定（横向滑动仍移动光标）；给某键配了 swipe_left/swipe_right
+  # 后该键横向滑动被按键接管、不再移光标，未配置的键不受影响。
   t9:
     keys:
       # 示例：给 8 下滑绑定"撤销"
       "8": { swipe_up: { value: "8", display: "key" }, swipe_down: { label: "撤销", action: "undo", display: "key" } }
       # 示例：给 9 下滑绑定打开剪贴板面板，并示范滑动气泡（display: "both"）
       "9": { swipe_up: { value: "9", display: "key" }, swipe_down: { label: "剪贴板", action: "switch_route", value: "clipboard", display: "both" } }
+      # 示例：给 7 绑定左右滑（左滑到行首、右滑到行尾）；该键横向滑动接管、不再移动光标
+      "7": { swipe_up: { value: "7", display: "key" }, swipe_left: { label: "行首", action: "line_start", display: "key" }, swipe_right: { label: "行尾", action: "line_end", display: "key" } }
 
   # ── 笔画键盘手势 ──
   # 键 id 为键面标签（一/丨/丿/丶/乛、*、分词、，、英）。

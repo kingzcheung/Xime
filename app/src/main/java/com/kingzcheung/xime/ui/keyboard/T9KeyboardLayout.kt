@@ -370,6 +370,8 @@ private fun T9KeyboardContent(
         return T9KeySwipes(
             onSwipeUp = swipeHandlerFor(gesture.swipeUp, commitDirect, onGestureAction),
             onSwipeDown = swipeHandlerFor(gesture.swipeDown, commitDirect, onGestureAction),
+            onSwipeLeft = swipeHandlerFor(gesture.swipeLeft, commitDirect, onGestureAction),
+            onSwipeRight = swipeHandlerFor(gesture.swipeRight, commitDirect, onGestureAction),
             swipeUpText = if (hintsActive && (gesture.swipeUp?.bubble ?: true)) upHint else null,
             swipeDownText = if (hintsActive && (gesture.swipeDown?.bubble ?: true)) downHint else null,
             swipeUpKeyLabel = swipeUpKeyLabel,
@@ -605,11 +607,6 @@ private fun T9KeyboardContent(
         val longPressConfig = binding?.longPress
         val longPressItems = longPressConfig?.let { KeysConfigHelper.longPressDisplayItems(it) }
         val longPressActionMap = longPressConfig?.let { KeysConfigHelper.longPressActionMap(it) }
-        // 左右滑与上滑共用 SwipeableKeyButton 的 onSwipe，必须按方向参数分派：
-        // 此前忽略方向（恒跑上滑处理器）→ 左/右滑会误触发上滑动作。
-        // 三者都没配置时仍传 null，保持「无手势绑定」的原判定（不影响点击/拖拽判定）。
-        val swipeLeftHandler = swipeHandlerFor(binding?.swipeLeft, commitDirect, onGestureAction)
-        val swipeRightHandler = swipeHandlerFor(binding?.swipeRight, commitDirect, onGestureAction)
         SwipeableKeyButton(
             text = label,
             // tap.bubble: false → 不弹按压气泡（默认 true，行为与改动前一致）
@@ -629,16 +626,10 @@ private fun T9KeyboardContent(
             swipeDownText = swipes.swipeDownText,
             swipeUpKeyLabel = swipes.swipeUpKeyLabel,
             swipeDownKeyLabel = swipes.swipeDownKeyLabel,
-            onSwipe = if (swipes.onSwipeUp != null || swipeLeftHandler != null || swipeRightHandler != null) {
-                { dir ->
-                    when (dir) {
-                        "left" -> swipeLeftHandler?.invoke()
-                        "right" -> swipeRightHandler?.invoke()
-                        else -> swipes.onSwipeUp?.invoke()
-                    }
-                }
-            } else null,
+            onSwipe = swipes.onSwipeUp?.let { handler -> { _: String -> handler() } },
             onSwipeDown = swipes.onSwipeDown?.let { handler -> { _: String -> handler() } },
+            onSwipeLeft = swipes.onSwipeLeft,
+            onSwipeRight = swipes.onSwipeRight,
             onLongPressSelect = { selected ->
                 dispatchLongPressSelection(selected, longPressActionMap, onKeyPress, callbacks.onCommitText, onGestureAction)
             },
@@ -835,6 +826,10 @@ private val DEFAULT_T9_DIGIT_LONG_PRESS: Map<String, List<String>> = mapOf(
 private data class T9KeySwipes(
     val onSwipeUp: (() -> Unit)? = null,
     val onSwipeDown: (() -> Unit)? = null,
+    /** 左滑动作（keyboard.t9.keys.<id>.swipe_left，未配置为 null：横向滑动仍移动光标） */
+    val onSwipeLeft: (() -> Unit)? = null,
+    /** 右滑动作（keyboard.t9.keys.<id>.swipe_right，未配置为 null：横向滑动仍移动光标） */
+    val onSwipeRight: (() -> Unit)? = null,
     /** 上滑滑动气泡文本（display: key 时不传） */
     val swipeUpText: String? = null,
     /** 下滑滑动气泡文本（display: key 时不传） */
@@ -889,11 +884,10 @@ private fun T9DigitKey(
         swipeDownText = currentSwipes.swipeDownText,
         swipeUpKeyLabel = currentSwipes.swipeUpKeyLabel,
         swipeDownKeyLabel = currentSwipes.swipeDownKeyLabel,
-        onSwipe = if (currentSwipes.onSwipeUp != null) {
-            // 横向滑动不得落到上滑处理器（此前忽略方向 → 左/右滑会误输入上滑内容）
-            { dir -> if (dir != "left" && dir != "right") currentSwipes.onSwipeUp?.invoke() }
-        } else null,
+        onSwipe = currentSwipes.onSwipeUp?.let { handler -> { _: String -> handler() } },
         onSwipeDown = currentSwipes.onSwipeDown?.let { handler -> { _: String -> handler() } },
+        onSwipeLeft = currentSwipes.onSwipeLeft,
+        onSwipeRight = currentSwipes.onSwipeRight,
         shadowEnabled = shadowEnabled,
         shadowElevation = shadowElevation,
         shadowShapeRadius = shadowShapeRadius,
@@ -991,11 +985,10 @@ private fun NineKeyButton(
         swipeDownText = swipes.swipeDownText,
         swipeUpKeyLabel = swipes.swipeUpKeyLabel,
         swipeDownKeyLabel = swipes.swipeDownKeyLabel,
-        onSwipe = if (swipes.onSwipeUp != null) {
-            // 横向滑动不得落到上滑处理器（此前忽略方向 → 左/右滑会误输入上滑内容）
-            { dir -> if (dir != "left" && dir != "right") swipes.onSwipeUp?.invoke() }
-        } else null,
+        onSwipe = swipes.onSwipeUp?.let { handler -> { _: String -> handler() } },
         onSwipeDown = swipes.onSwipeDown?.let { handler -> { _: String -> handler() } },
+        onSwipeLeft = swipes.onSwipeLeft,
+        onSwipeRight = swipes.onSwipeRight,
         shadowEnabled = shadowEnabled,
         shadowElevation = shadowElevation,
         shadowShapeRadius = shadowShapeRadius,
