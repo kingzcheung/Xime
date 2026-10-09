@@ -12,9 +12,12 @@ package com.kingzcheung.xime.plugin.core.js.http
  *
  * Lua 侧注入为 `host.http`：
  *   host.http.request(method, url, headers, body, timeoutMillis) -> {status, headers, body}
+ *   host.http.upload(method, url, headers, blobId, timeoutMillis) -> {status, headers, body}
+ *   host.http.download(method, url, headers, timeoutMillis) -> {status, headers, body, blobId, size}
  *   host.http.lastError()
  *
  * @see com.kingzcheung.xime.plugin.core.js.ws.WsHostApi
+ * @see BlobStore
  */
 interface HttpHostApi {
 
@@ -37,6 +40,44 @@ interface HttpHostApi {
         timeoutMillis: Int? = null
     ): HttpResponse?
 
+    /**
+     * 流式上传：请求体取自宿主 blob（[BlobStore] 登记的 id），宿主按块写入网络。
+     *
+     * 与 [request] 的区别只在**请求体来源**：字节不经过 JS 堆，因此大文件（备份包等）
+     * 上传的内存占用与文件大小无关。协议语义（方法、Content-Type、认证头、ETag）
+     * 仍完全由插件承载——宿主不知道这是 WebDAV 还是 S3。
+     *
+     * @param method  HTTP 方法（PUT/POST/PATCH；GET/DELETE 等无体积语义的方法请用 [request]）
+     * @param blobId  宿主 blob id（如 backup.push 参数里的 archiveId）
+     * @param timeoutMillis 覆盖默认超时（毫秒；null 用宿主默认）
+     * @return 响应（与 [request] 同形）；blobId 无效 / 文档不存在 / 网络失败返回 null
+     */
+    fun upload(
+        method: String,
+        url: String,
+        headers: Map<String, String> = emptyMap(),
+        blobId: String,
+        timeoutMillis: Int? = null
+    ): HttpResponse? = null
+
+    /**
+     * 流式下载：2xx 响应体由宿主边收边落盘为 blob，正文不占内存。
+     *
+     * 非 2xx 保持 [request] 语义（正文读进内存，错误页通常很小），方便插件把服务器
+     * 原因写进失败消息；因此调用方需按状态码区分 [HttpResponse.blobId] / [HttpResponse.body]。
+     *
+     * @param method  HTTP 方法（GET/HEAD）
+     * @param timeoutMillis 覆盖默认超时（毫秒；null 用宿主默认）
+     * @return 响应；2xx 时 [HttpResponse.blobId] 为落盘句柄、[HttpResponse.size] 为字节数；
+     *   失败返回 null。落盘句柄需由宿主在搬运/恢复后 [BlobStore.release]
+     */
+    fun download(
+        method: String,
+        url: String,
+        headers: Map<String, String> = emptyMap(),
+        timeoutMillis: Int? = null
+    ): HttpResponse? = null
+
     /** 最近一次拒绝/失败原因（request 返回 null 时 JS 侧 XimeError.message 数据源）。 */
     fun lastError(): String?
 
@@ -53,11 +94,15 @@ interface HttpHostApi {
  * @param status  HTTP 状态码（200/304/401/404…）
  * @param headers 响应头（含 ETag / Last-Modified 等，插件 Lua 用于条件拉取）
  * @param body    响应体（文本按 UTF-8 解码，二进制原始字节）
+ * @param blobId  流式下载落盘的宿主 blob 句柄（[HttpHostApi.download] 2xx 时非空，body 为空）
+ * @param size    流式下载字节数（非流式响应为 -1）
  */
 data class HttpResponse(
     val status: Int,
     val headers: Map<String, String> = emptyMap(),
-    val body: ByteArray = ByteArray(0)
+    val body: ByteArray = ByteArray(0),
+    val blobId: String? = null,
+    val size: Long = -1
 ) {
     /** 取响应头（大小写不敏感）。 */
     fun header(name: String): String? {

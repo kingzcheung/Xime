@@ -107,7 +107,7 @@ fun DictionaryHubContent(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(
-                "跨设备搬运：单本词库用「用户词库 → 导出/导入文本码表」，与电脑端小狼毫、鼠须管同格式；" +
+                "跨设备搬运：单本词库用「用户词库 → 导出/导入文本码表」，与电脑端 rime 同格式；" +
                     "多设备按时间戳合并请用「同步与备份 → 词库同步」。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant

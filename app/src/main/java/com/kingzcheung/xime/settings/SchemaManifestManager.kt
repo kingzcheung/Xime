@@ -43,11 +43,15 @@ object SchemaManifestManager {
     private const val MANIFESTS_DIR = ".manifests"
     private const val REGISTRY_VERSION = 1
 
-    fun getRegistryFile(context: Context): File =
-        File(context.filesDir, REGISTRY_FILE)
+    fun getRegistryFile(context: Context): File = getRegistryFile(context.filesDir)
 
-    fun getManifestsDir(context: Context): File =
-        File(context.filesDir, MANIFESTS_DIR)
+    /** 纯 JVM 变体（备份打包/恢复用，不依赖 Context）。 */
+    fun getRegistryFile(filesDir: File): File = File(filesDir, REGISTRY_FILE)
+
+    fun getManifestsDir(context: Context): File = getManifestsDir(context.filesDir)
+
+    /** 纯 JVM 变体（备份打包/恢复用，不依赖 Context）。 */
+    fun getManifestsDir(filesDir: File): File = File(filesDir, MANIFESTS_DIR)
 
     fun getManifestFile(context: Context, schemeId: String): File =
         File(getManifestsDir(context), "$schemeId.json")

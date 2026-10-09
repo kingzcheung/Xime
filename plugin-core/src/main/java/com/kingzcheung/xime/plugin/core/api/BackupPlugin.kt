@@ -31,6 +31,20 @@ data class BackupResult(
 )
 
 /**
+ * 下载产物：宿主缓存文件 + 其 blob 句柄。
+ *
+ * @param blobId 宿主 [com.kingzcheung.xime.plugin.core.js.http.BlobStore] 句柄
+ *   （[BackupPlugin.releaseBackup] 用；插件侧返回的就是它）
+ * @param file   落盘的备份包（恢复流程直接解压，**不经过 JS 堆**）
+ * @param size   字节数
+ */
+data class BackupDownload(
+    val blobId: String,
+    val file: java.io.File,
+    val size: Long
+)
+
+/**
  * 备份插件能力接口（宿主侧，由 JS 适配器实现，协议逻辑在 JS）。
  *
  * 分工与 [ClipboardSyncPlugin] 一致：备份包的**生成与恢复**（zip 打包、路径校验、
@@ -38,8 +52,12 @@ data class BackupResult(
  * （WebDAV / S3 / 自建 HTTP），用 `host.http` + `host.crypto` + `host.config` 实现。
  * 服务器地址、账号等配置由插件 getSettingsSchema 表单承载（host.config 存取）。
  *
- * 归档数据为 zip 字节流，经 JS 侧二进制安全的 Uint8Array 传递，
- * 插件可直接作为 host.http.request 的 body 上传。
+ * **大包走流式句柄**（v3.1 契约，替代历史 `Uint8Array` 传参）：
+ * - 上传：归档以宿主文件形式交给 [pushBackup]，适配器登记为 blob 句柄后只把
+ *   `{name, size, archiveId}` 传给插件；插件用 `host.http.upload` 流式 PUT，
+ *   全程不把包读进内存（旧实现把整包 base64 进 JS 源码，数十 MB 即 OOM）
+ * - 下载：插件用 `host.http.download` 让宿主把响应体流式落盘并返回 blob 句柄；
+ *   适配器解析为 [BackupDownload] 供宿主解压，恢复完由 [releaseBackup] 释放
  */
 interface BackupPlugin : IPluginEntryClass, IPluginConfigurable {
 
@@ -47,17 +65,20 @@ interface BackupPlugin : IPluginEntryClass, IPluginConfigurable {
      * 上传备份包到远端。
      *
      * @param name    建议的远端文件名（如 "Xime配置-2026-09-06.zip"），插件可自行附加目录前缀
-     * @param archive zip 字节流
+     * @param archive 宿主已落盘的 zip（**所有权归调用方**，实现方只登记句柄、不删除文件）
      */
-    suspend fun pushBackup(name: String, archive: ByteArray): BackupResult
+    suspend fun pushBackup(name: String, archive: java.io.File): BackupResult
 
     /**
-     * 下载指定备份包。
+     * 下载指定备份包到宿主缓存文件。
      *
      * @param id listBackups 返回的远端标识
-     * @return zip 字节流；失败返回 null
+     * @return 落盘产物（含 blob 句柄）；失败返回 null
      */
-    suspend fun pullBackup(id: String): ByteArray?
+    suspend fun pullBackup(id: String): BackupDownload?
+
+    /** 释放 [pullBackup] 产物的 blob 句柄（删除宿主缓存文件；幂等）。 */
+    fun releaseBackup(blobId: String)
 
     /**
      * 列出远端备份条目。

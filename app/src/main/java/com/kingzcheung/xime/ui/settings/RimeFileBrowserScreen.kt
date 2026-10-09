@@ -65,10 +65,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.kingzcheung.xime.settings.ExportMode
 import com.kingzcheung.xime.settings.ExportResult
 import com.kingzcheung.xime.settings.RimeExportManager
 import com.kingzcheung.xime.settings.SchemaManager
+import com.kingzcheung.xime.settings.SyncManager
 import io.github.rosemoe.sora.event.ContentChangeEvent
 import io.github.rosemoe.sora.langs.textmate.TextMateColorScheme
 import io.github.rosemoe.sora.langs.textmate.TextMateLanguage
@@ -103,7 +103,6 @@ fun RimeFileBrowserContent(onBack: () -> Unit) {
     var viewingFile by remember { mutableStateOf<File?>(null) }
     var showDeleteDialog by remember { mutableStateOf<File?>(null) }
     var showExportDialog by remember { mutableStateOf(false) }
-    var exportMode by remember { mutableStateOf(ExportMode.CONFIG_ONLY) }
     var exportInProgress by remember { mutableStateOf(false) }
     var exportResult by remember { mutableStateOf<ExportResult?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
@@ -244,35 +243,12 @@ fun RimeFileBrowserContent(onBack: () -> Unit) {
             onDismissRequest = { showExportDialog = false },
             title = { Text("导出 Rime 配置") },
             text = {
-                Column {
-                    Text("选择导出范围：")
-                    Spacer(Modifier.height(12.dp))
-                    ExportMode.entries.forEach { mode ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { exportMode = mode }
-                                .padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            RadioButton(
-                                selected = exportMode == mode,
-                                onClick = { exportMode = mode }
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text(mode.label, style = MaterialTheme.typography.bodyMedium)
-                        }
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        if (exportMode == ExportMode.CONFIG_ONLY)
-                            "排除 build/ 目录和 .bin/.gram 等编译产物"
-                        else
-                            "包含 Rime 目录下所有文件和子目录",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                Text(
+                    "导出整机完整快照（设置与补丁、方案本体与资源、插件包、自造词快照）为 zip，保存到下载目录。" +
+                        "与云备份是同一个包；不含编译产物 build/ 与用户词典库 *.userdb。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             },
             confirmButton = {
                 TextButton(
@@ -281,7 +257,9 @@ fun RimeFileBrowserContent(onBack: () -> Unit) {
                         exportInProgress = true
                         scope.launch {
                             val result = withContext(Dispatchers.IO) {
-                                RimeExportManager.exportArchive(context, exportMode)
+                                // 与云备份同构：导出前尽力刷新自造词快照（引擎未就绪则用现有快照）
+                                SyncManager.syncNow(context)
+                                RimeExportManager.exportArchive(context)
                             }
                             exportInProgress = false
                             result.fold(

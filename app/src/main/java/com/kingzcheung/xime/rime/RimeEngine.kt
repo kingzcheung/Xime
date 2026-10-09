@@ -603,7 +603,7 @@ class RimeEngine {
 
     /**
      * 导出用户词库为文本码表文件（`词<TAB>码<TAB>频率` + `#@` 元数据注释头）。
-     * 走 librime `UserDictManager::Export`，与 PC 端（小狼毫/鼠须管）**同一实现**，
+     * 走 librime `UserDictManager::Export`，与电脑端 rime **同一实现**，
      * 文件可互通；已标记删除的条目不会写出。
      * @param textFilePath 必须是真实文件路径（librime 直接开 ofstream）。
      * @return 导出的条目数；失败返回 -1。

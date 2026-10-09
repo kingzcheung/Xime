@@ -12,6 +12,7 @@ object SettingsPreferences {
     private const val KEY_CURRENT_SCHEMA_DUAL = "current_schema_dual"
     private const val KEY_DEPLOYMENT_DONE = "deployment_done"
     private const val KEY_BUILTIN_SCHEMAS_MERGED = "builtin_schemas_merged"
+    private const val KEY_PENDING_DICT_MERGE = "pending_dict_merge"
     private const val KEY_DEPLOYMENT_HASH = "deployment_hash"
     private const val KEY_RIME_ASSETS_VERSION = "rime_assets_version"
     private const val KEY_SETUP_COMPLETED = "setup_completed"
@@ -209,6 +210,18 @@ object SettingsPreferences {
 
     fun setBuiltinSchemasMerged(context: Context, merged: Boolean) {
         getPrefs(context).edit().putBoolean(KEY_BUILTIN_SCHEMAS_MERGED, merged).apply()
+    }
+
+    /**
+     * 待合并的自造词快照标记：恢复备份时若引擎未就绪（冷启动直接进设置页），
+     * 快照已落盘但无法调 `syncUserData()` 合并——由 IME 服务在引擎就绪后补做。
+     */
+    fun isPendingDictMerge(context: Context): Boolean {
+        return getPrefs(context).getBoolean(KEY_PENDING_DICT_MERGE, false)
+    }
+
+    fun setPendingDictMerge(context: Context, pending: Boolean) {
+        getPrefs(context).edit().putBoolean(KEY_PENDING_DICT_MERGE, pending).apply()
     }
 
     fun getDeploymentHash(context: Context): String {

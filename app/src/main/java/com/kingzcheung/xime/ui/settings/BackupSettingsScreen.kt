@@ -9,7 +9,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -18,14 +20,17 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.twotone.CloudUpload
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -50,7 +55,7 @@ import com.kingzcheung.xime.plugin.core.api.BackupPlugin
 import com.kingzcheung.xime.plugin.core.model.PluginCategory
 import com.kingzcheung.xime.plugin.core.model.PluginInfo
 import com.kingzcheung.xime.settings.BackupManager
-import com.kingzcheung.xime.settings.ExportMode
+import com.kingzcheung.xime.settings.RimeExportManager
 import com.kingzcheung.xime.settings.SettingsPreferences
 import com.kingzcheung.xime.settings.SyncManager
 import com.kingzcheung.xime.plugin.core.runtime.PluginManager
@@ -64,9 +69,10 @@ import java.util.Locale
 /**
  * 同步与备份设置页。
  *
- * 词库同步为主链路：基于引擎原生用户词典同步（sync 快照，时间戳合并），
- * 支持本地导入/导出与经备份插件的多端云端互通；配置备份为附带功能
- * （方案/设置/插件包，不含用户词典——词典统一走快照合并语义）。
+ * 两条链路同源（都基于引擎原生 sync 文本快照、按时间戳合并）：
+ * - 词库同步：只同步自造词（sync 目录 ↔ 云插件通道），适合高频、增量
+ * - 云备份：完整快照归档（设置/补丁 + 自造词 + 可选方案与插件），适合换机/灾难恢复
+ * 备份包内的自造词同样是快照文本，恢复时合并而非覆盖 leveldb。
  * 备份目标为已安装的 backup 类型插件（单选激活，与剪贴板同步同模式），
  * 包由宿主生成/恢复，服务器配置由所选插件的配置表单承载。
  */
@@ -75,7 +81,9 @@ import java.util.Locale
 fun BackupSettingsContent(
     onBack: () -> Unit,
     onNavigateToPlugins: () -> Unit,
-    onNavigateToMarket: () -> Unit
+    onNavigateToMarket: () -> Unit,
+    /** 打开所选备份服务的配置页（独立页面，与插件中心同一入口） */
+    onNavigateToPluginSettings: (String) -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -96,7 +104,6 @@ fun BackupSettingsContent(
             syncPlugins.firstOrNull { it.first == selectedPluginId } ?: syncPlugins.firstOrNull()
         )
     }
-    var backupMode by remember { mutableStateOf(ExportMode.CONFIG_ONLY) }
     // 当前进行中的操作标识（"backup"/"list"/"restore:<id>"/"delete:<id>"）：
     // 按操作独立，loading 只出现在触发它的按钮上，其余按钮仅禁用
     var busyOp by remember { mutableStateOf<String?>(null) }
@@ -105,6 +112,13 @@ fun BackupSettingsContent(
     var remoteList by remember { mutableStateOf<List<com.kingzcheung.xime.plugin.core.api.RemoteBackupEntry>?>(null) }
     // 切换备份服务走单选弹窗（与剪贴板同步/语音转文本同构：插件多时页面长度恒定）
     var showServicePicker by remember { mutableStateOf(false) }
+    // 本地完整方案包导入的确认（覆盖式恢复，先确认再选文件）
+    var pendingLocalImportUri by remember { mutableStateOf<android.net.Uri?>(null) }
+    // 低频本地操作收进弹层：词条导入/导出、完整方案保存/恢复
+    var showDictSheet by remember { mutableStateOf(false) }
+    var showLocalSheet by remember { mutableStateOf(false) }
+    // 云端备份列表展开态（默认收起，页面保持短）
+    var remoteListExpanded by remember { mutableStateOf(false) }
 
     // 词库同步（词典快照为主链路，配置备份为附带；语义分工见各区块说明）
     var lastSyncAt by remember {
@@ -132,11 +146,29 @@ fun BackupSettingsContent(
                 busyOp = null
                 lastSyncAt = SettingsPreferences.getLastRimeSyncAt(context)
                 message = result.fold(
-                    onSuccess = { "已导入 $it 个快照并完成合并" },
+                    onSuccess = { r ->
+                        buildString {
+                            if (r.snapshotFiles > 0) {
+                                append("已导入 ${r.snapshotFiles} 个快照")
+                                if (r.merged) append("并完成合并")
+                            }
+                            if (r.importedEntries > 0) {
+                                if (isNotEmpty()) append("；")
+                                append("已导入 ${r.importedEntries} 条词条")
+                            }
+                        }
+                    },
                     onFailure = { "导入失败：${it.message}" }
                 )
             }
         }
+    }
+
+    val localPackageLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        pendingLocalImportUri = uri
     }
 
     Scaffold(
@@ -196,14 +228,17 @@ fun BackupSettingsContent(
                             pluginInfo = installedPlugins.find { it.id == activePlugin?.first },
                             pluginId = activePlugin?.first,
                             plugin = activePlugin?.second,
-                            onClick = { showServicePicker = true }
+                            onClick = { showServicePicker = true },
+                            onConfigure = activePlugin?.first?.let { id ->
+                                { onNavigateToPluginSettings(id) }
+                            }
                         )
                     }
                 }
             )
 
             SettingsSection(
-                title = "词库同步",
+                title = "词条（自造词）",
                 content = {
                     Column(
                         modifier = Modifier
@@ -222,21 +257,36 @@ fun BackupSettingsContent(
                                             .format(Date(lastSyncAt))
                                     } else "从未"
                                 )
+                                syncRemoteList?.let { append("　云端快照：${it.size} 份") }
                             },
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                        // 一个动作：本机整理（引擎原生 sync）+ 已配置服务时顺带云端多设备合并
                         Button(
                             onClick = {
-                                busyOp = "sync"
+                                busyOp = "syncAll"
                                 message = null
                                 scope.launch(Dispatchers.IO) {
-                                    val result = SyncManager.syncNow(context)
+                                    val plugin = activePlugin?.second
+                                    val result: Result<Int> = if (plugin != null) {
+                                        SyncManager.remoteSync(context, plugin)
+                                    } else {
+                                        SyncManager.syncNow(context).map { 0 }
+                                    }
+                                    val fresh = plugin?.let { SyncManager.listRemoteSnapshots(it) }
                                     withContext(Dispatchers.Main) {
                                         busyOp = null
+                                        if (fresh != null) syncRemoteList = fresh
                                         lastSyncAt = SettingsPreferences.getLastRimeSyncAt(context)
                                         message = result.fold(
-                                            onSuccess = { "同步完成" },
+                                            onSuccess = { pulled ->
+                                                when {
+                                                    plugin == null -> "已整理本机词条（未配置备份服务，未上云）"
+                                                    pulled > 0 -> "已合并 $pulled 台设备的词条，并上传本机快照"
+                                                    else -> "已上传本机快照（云端暂无其他设备）"
+                                                }
+                                            },
                                             onFailure = { "同步失败：${it.message}" }
                                         )
                                     }
@@ -245,137 +295,25 @@ fun BackupSettingsContent(
                             enabled = !busy,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            if (busyOp == "sync") {
+                            if (busyOp == "syncAll") {
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(14.dp),
                                     strokeWidth = 2.dp
                                 )
                             } else {
-                                Text("立即同步")
+                                Text("同步词条")
                             }
                         }
-                        Text(
-                            text = "合并本机 sync 目录中已有的快照（含此前导入的），并导出本机最新快照。",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            OutlinedButton(
-                                onClick = {
-                                    busyOp = "import"
-                                    importLauncher.launch(arrayOf("*/*"))
-                                },
-                                enabled = !busy
-                            ) {
-                                if (busyOp == "import") {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(14.dp),
-                                        strokeWidth = 2.dp
-                                    )
-                                } else {
-                                    Text("导入快照")
-                                }
-                            }
-                            OutlinedButton(
-                                onClick = {
-                                    busyOp = "export"
-                                    message = null
-                                    scope.launch(Dispatchers.IO) {
-                                        val result = SyncManager.exportToDownloads(context)
-                                        withContext(Dispatchers.Main) {
-                                            busyOp = null
-                                            message = result.fold(
-                                                onSuccess = { "已保存到下载目录：$it" },
-                                                onFailure = { "导出失败：${it.message}" }
-                                            )
-                                        }
-                                    }
-                                },
-                                enabled = !busy
-                            ) {
-                                if (busyOp == "export") {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(14.dp),
-                                        strokeWidth = 2.dp
-                                    )
-                                } else {
-                                    Text("导出到下载")
-                                }
-                            }
-                        }
-                        Text(
-                            text = "词典快照基于引擎原生同步：多设备词条按时间戳合并不互相覆盖。导入支持快照包 zip 与 .userdb.txt 文本快照（从其他设备/桌面端的 sync 目录拷出即可迁移）；导出的 zip 也可放进电脑端引擎目录的 sync 文件夹直接合并。",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline
-                        )
-                    }
-                }
-            )
-
-            activePlugin?.let { selected ->
-                val plugin = selected.second
-
-                SettingsSection(
-                    title = "云端快照",
-                    content = {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Button(
-                                onClick = {
-                                    busyOp = "remote"
-                                    message = null
-                                    scope.launch(Dispatchers.IO) {
-                                        val result = SyncManager.remoteSync(context, plugin)
-                                        withContext(Dispatchers.Main) {
-                                            busyOp = null
-                                            lastSyncAt = SettingsPreferences.getLastRimeSyncAt(context)
-                                            message = result.fold(
-                                                onSuccess = { pulled ->
-                                                    scope.launch(Dispatchers.IO) {
-                                                        val fresh = SyncManager.listRemoteSnapshots(plugin)
-                                                        withContext(Dispatchers.Main) {
-                                                            syncRemoteList = fresh
-                                                        }
-                                                    }
-                                                    if (pulled > 0) "已合并 $pulled 台设备的快照并上传本机快照"
-                                                    else "已上传本机快照（远端暂无其他设备）"
-                                                },
-                                                onFailure = { "云端同步失败：${it.message}" }
-                                            )
-                                        }
-                                    }
-                                },
-                                enabled = !busy,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                if (busyOp == "remote") {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(14.dp),
-                                        strokeWidth = 2.dp
-                                    )
-                                } else {
-                                    Text("同步到云端")
-                                }
-                            }
-                            val syncList = syncRemoteList
-                            if (syncList == null) {
+                        // 云端各设备快照（只读；合并由上面动作完成）
+                        syncRemoteList?.let { list ->
+                            if (list.isEmpty()) {
                                 Text(
-                                    text = "正在获取远端快照列表…",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            } else if (syncList.isEmpty()) {
-                                Text(
-                                    text = "云端暂无快照。执行\"同步到云端\"后，其他设备将能看到本机快照并自动合并新词条。",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    text = "云端暂无快照；同步后其他设备可看到本机快照并自动合并新词条。",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.outline
                                 )
                             } else {
-                                syncList.forEach { entry ->
+                                list.forEach { entry ->
                                     Column {
                                         Text(
                                             text = entry.name,
@@ -401,134 +339,137 @@ fun BackupSettingsContent(
                                 }
                             }
                         }
-                    }
-                )
-
-                SettingsSection(
-                    title = "备份设置",
-                    content = {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 8.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        // 低频手动搬运收进弹层
+                        TextButton(
+                            onClick = { showDictSheet = true },
+                            enabled = !busy,
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            ExportMode.entries.forEach { mode ->
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    RadioButton(
-                                        selected = backupMode == mode,
-                                        onClick = { backupMode = mode }
-                                    )
-                                    Text(
-                                        text = mode.label,
-                                        style = MaterialTheme.typography.bodyMedium
-                                    )
-                                }
-                            }
-                            if (backupMode == ExportMode.CONFIG_ONLY) {
-                                Text(
-                                    text = "仅配置：额外排除模型（.bin/.gram）；完整备份另含插件包。两种模式均不含用户词典——词典请使用上方\"词库同步\"快照，恢复配置包不会回滚词条。",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.outline
-                                )
-                            }
+                            Text("导入 / 导出词条  ›", fontSize = 13.sp)
                         }
+                        Text(
+                            text = "词条（自造词）基于引擎原生同步：多设备按时间戳合并不互相覆盖。" +
+                                "导入支持其他 rime 前端/桌面端 sync 目录里的 `<词典名>.userdb.txt` 快照与 `<词典名>.txt` 词条码表。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
                     }
-                )
+                }
+            )
 
-                SettingsSection(
-                    title = "备份操作",
-                    content = {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
+            SettingsSection(
+                title = "完整备份（配置与方案）",
+                content = {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = "备份 = 整机的完整快照：设置与用户补丁、方案本体与资源、插件包、" +
+                                "以及自造词快照（恢复时按时间戳合并，不会吃掉本机新词）。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                Button(
-                                    onClick = {
-                                        busyOp = "backup"
-                                        message = null
-                                        scope.launch(Dispatchers.IO) {
-                                            val result = BackupManager.backupNow(context, plugin, backupMode)
-                                            withContext(Dispatchers.Main) {
-                                                busyOp = null
-                                                message = if (result.ok) "备份完成"
-                                                else "备份失败：${result.message ?: "未知错误"}"
+                            Button(
+                                onClick = {
+                                    val plugin = activePlugin?.second ?: return@Button
+                                    busyOp = "backup"
+                                    message = null
+                                    scope.launch(Dispatchers.IO) {
+                                        val result = BackupManager.backupNow(context, plugin)
+                                        withContext(Dispatchers.Main) {
+                                            busyOp = null
+                                            message = if (result.ok) {
+                                                "备份完成" + (result.message ?: "")
+                                            } else {
+                                                "备份失败：${result.message ?: "未知错误"}"
                                             }
                                         }
-                                    },
-                                    modifier = Modifier.weight(1f),
-                                    enabled = !busy
-                                ) {
-                                    if (busyOp == "backup") {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(18.dp),
-                                            strokeWidth = 2.dp
-                                        )
-                                    } else {
-                                        Icon(Icons.TwoTone.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
                                     }
-                                    Text(
-                                        text = "立即备份",
-                                        fontSize = 12.sp,
-                                        modifier = Modifier.padding(start = 6.dp)
+                                },
+                                modifier = Modifier.weight(1f),
+                                enabled = !busy && activePlugin != null
+                            ) {
+                                if (busyOp == "backup") {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        strokeWidth = 2.dp
                                     )
+                                } else {
+                                    Icon(Icons.TwoTone.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
                                 }
-                                OutlinedButton(
-                                    onClick = {
-                                        busyOp = "list"
-                                        message = null
-                                        scope.launch(Dispatchers.IO) {
-                                            // 词库同步快照（rime-sync- 前缀）属于词库同步页，
-                                            // 不参与全量恢复语义，此处过滤不展示
-                                            val list = BackupManager.listRemote(plugin)
-                                                ?.filter { !SyncManager.isRemoteSyncEntry(it.name) }
-                                            val err = if (list == null) "获取备份列表失败" else null
-                                            withContext(Dispatchers.Main) {
-                                                busyOp = null
-                                                remoteList = list
-                                                message = err
-                                            }
-                                        }
-                                    },
-                                    modifier = Modifier.weight(1f),
-                                    enabled = !busy
-                                ) {
-                                    Text("查看远端备份", fontSize = 12.sp)
-                                }
-                            }
-                            message?.let {
                                 Text(
-                                    text = it,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    text = "立即备份",
+                                    fontSize = 12.sp,
+                                    modifier = Modifier.padding(start = 6.dp)
                                 )
                             }
-                        }
-                    }
-                )
-
-                remoteList?.let { list ->
-                    SettingsSection(
-                        title = "远端备份",
-                        content = {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(16.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            OutlinedButton(
+                                onClick = {
+                                    val plugin = activePlugin?.second ?: return@OutlinedButton
+                                    if (remoteListExpanded) {
+                                        remoteListExpanded = false
+                                        return@OutlinedButton
+                                    }
+                                    remoteListExpanded = true
+                                    busyOp = "list"
+                                    message = null
+                                    scope.launch(Dispatchers.IO) {
+                                        // 词条快照（rime-sync- 前缀）属于词条区，不参与全量恢复语义，此处过滤
+                                        val list = BackupManager.listRemote(plugin)
+                                            ?.filter { !SyncManager.isRemoteSyncEntry(it.name) }
+                                        val err = if (list == null) "获取备份列表失败" else null
+                                        withContext(Dispatchers.Main) {
+                                            busyOp = null
+                                            remoteList = list
+                                            message = err
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.weight(1f),
+                                enabled = !busy && activePlugin != null
                             ) {
+                                if (busyOp == "list") {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(14.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                } else {
+                                    Text(
+                                        if (remoteListExpanded) "收起列表" else "云端备份列表",
+                                        fontSize = 12.sp
+                                    )
+                                }
+                            }
+                        }
+                        if (activePlugin == null) {
+                            Text(
+                                text = "未配置备份服务：云端备份不可用；可用下方「保存到本地 / 从本地恢复」。",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                        }
+                        message?.let {
+                            Text(
+                                text = it,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        // 云端备份包列表（展开时；恢复=覆盖式，自造词按时间戳合并）
+                        if (remoteListExpanded) {
+                            val plugin = activePlugin?.second
+                            val list = remoteList
+                            if (plugin != null && list != null) {
                                 if (list.isEmpty()) {
                                     Text(
-                                        text = "远端暂无备份",
+                                        text = "云端暂无备份",
                                         style = MaterialTheme.typography.bodyMedium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -571,7 +512,7 @@ fun BackupSettingsContent(
                                                         withContext(Dispatchers.Main) {
                                                             busyOp = null
                                                             message = if (result.isSuccess)
-                                                                "恢复完成，重启应用后生效；如需找回备份后新增的词条，请在\"词库同步\"中重新执行同步"
+                                                                "恢复完成，重启应用后生效；自造词快照将在引擎就绪后按时间戳合并"
                                                             else "恢复失败：${result.exceptionOrNull()?.message}"
                                                         }
                                                     }
@@ -623,24 +564,145 @@ fun BackupSettingsContent(
                                         }
                                     }
                                 }
-                                Text(
-                                    text = "恢复覆盖 rime/ 目录同名文件（含自造词），并还原插件、插件配置与设置项；重启应用后全部生效。",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.outline
+                            }
+                        }
+                        TextButton(
+                            onClick = { showLocalSheet = true },
+                            enabled = !busy,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("保存到本地 / 从本地恢复  ›", fontSize = 13.sp)
+                        }
+                        Text(
+                            text = "恢复覆盖 rime/ 目录同名文件（含自造词），并还原插件、插件配置与设置项；重启应用后全部生效。" +
+                                "自造词按时间戳合并不吃新词；编译产物 build/ 与用户词典库 *.userdb 不进包。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
+                }
+            )
+
+        }
+    }
+
+    // 词条本地导入/导出（低频，收进弹层；与 rime 生态其他前端格式互通）
+    if (showDictSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showDictSheet = false },
+            sheetState = rememberModalBottomSheetState(),
+            shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    "导入 / 导出词条",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Button(
+                    onClick = {
+                        showDictSheet = false
+                        busyOp = "import"
+                        message = null
+                        importLauncher.launch(arrayOf("*/*"))
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !busy
+                ) {
+                    Text("导入词条（快照 / 码表）")
+                }
+                OutlinedButton(
+                    onClick = {
+                        showDictSheet = false
+                        busyOp = "export"
+                        message = null
+                        scope.launch(Dispatchers.IO) {
+                            val result = SyncManager.exportToDownloads(context)
+                            withContext(Dispatchers.Main) {
+                                busyOp = null
+                                message = result.fold(
+                                    onSuccess = { "已保存到下载目录：$it" },
+                                    onFailure = { "导出失败：${it.message}" }
                                 )
                             }
                         }
-                    )
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !busy
+                ) {
+                    Text("导出词条快照到下载")
                 }
-
-                // 服务器地址等配置由插件表单承载（host.config）
-                PluginConfigFormScreen(
-                    pluginId = selected.first,
-                    plugin = plugin,
-                    pluginName = installedPlugins.find { it.id == selected.first }?.name ?: selected.first,
-                    onBack = {},
-                    embedded = true
+                Text(
+                    text = "导入吃其他 rime 前端/桌面端导出的 `<词典名>.userdb.txt` 快照与 `<词典名>.txt` 词条码表；" +
+                        "导出的 zip 解压后其中的快照也能被对方还原。词条一律按时间戳合并，不会覆盖本机新词。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline
                 )
+                Spacer(Modifier.height(24.dp))
+            }
+        }
+    }
+
+    // 完整方案的本地保存/恢复（与云端「立即备份」同格式的包）
+    if (showLocalSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showLocalSheet = false },
+            sheetState = rememberModalBottomSheetState(),
+            shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    "保存到本地 / 从本地恢复",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Button(
+                    onClick = {
+                        showLocalSheet = false
+                        busyOp = "exportLocal"
+                        message = null
+                        scope.launch(Dispatchers.IO) {
+                            val result = RimeExportManager.exportArchive(context)
+                            withContext(Dispatchers.Main) {
+                                busyOp = null
+                                message = result.fold(
+                                    onSuccess = { "已导出完整方案到下载目录：${it.fileName}" },
+                                    onFailure = { "导出失败：${it.message}" }
+                                )
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !busy
+                ) {
+                    Text("导出完整方案")
+                }
+                OutlinedButton(
+                    onClick = {
+                        showLocalSheet = false
+                        localPackageLauncher.launch(arrayOf("*/*"))
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !busy
+                ) {
+                    Text("从本地导入")
+                }
+                Text(
+                    text = "与云端「立即备份」同一个包格式（换机/离线可用）。本地导入为覆盖式恢复，会先弹确认。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline
+                )
+                Spacer(Modifier.height(24.dp))
             }
         }
     }
@@ -689,6 +751,43 @@ fun BackupSettingsContent(
             onDismiss = { showServicePicker = false }
         )
     }
+
+    // 本地完整方案包导入：覆盖式恢复，先确认再解包
+    pendingLocalImportUri?.let { uri ->
+        AlertDialog(
+            onDismissRequest = { pendingLocalImportUri = null },
+            title = { Text("从本地导入完整方案") },
+            text = {
+                Text(
+                    "会覆盖 rime/ 目录下同名配置与方案文件，并还原插件、插件配置与设置项；" +
+                        "自造词按时间戳合并（不会吃掉本机新词）。重启应用后全部生效。"
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingLocalImportUri = null
+                        busyOp = "importLocal"
+                        message = null
+                        scope.launch(Dispatchers.IO) {
+                            val result = BackupManager.importLocal(context, uri)
+                            withContext(Dispatchers.Main) {
+                                busyOp = null
+                                lastSyncAt = SettingsPreferences.getLastRimeSyncAt(context)
+                                message = result.fold(
+                                    onSuccess = { "已从本地导入完整方案，重启应用后生效" },
+                                    onFailure = { "导入失败：${it.message}" }
+                                )
+                            }
+                        }
+                    }
+                ) { Text("导入") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingLocalImportUri = null }) { Text("取消") }
+            }
+        )
+    }
 }
 
 /**
@@ -704,6 +803,8 @@ private fun CurrentBackupServiceItem(
     pluginId: String?,
     plugin: BackupPlugin?,
     onClick: () -> Unit,
+    /** 非空时在行内提供「配置」入口（打开独立配置页） */
+    onConfigure: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val icon = remember(pluginId, plugin) {
@@ -742,6 +843,11 @@ private fun CurrentBackupServiceItem(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary
                 )
+            }
+        }
+        if (onConfigure != null) {
+            TextButton(onClick = onConfigure) {
+                Text("配置", style = MaterialTheme.typography.labelLarge)
             }
         }
         Text(

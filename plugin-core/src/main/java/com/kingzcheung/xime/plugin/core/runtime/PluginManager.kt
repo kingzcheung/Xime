@@ -47,6 +47,15 @@ object PluginManager {
     var httpHostApiFactory: ((pluginId: String) -> com.kingzcheung.xime.plugin.core.js.http.HttpHostApi)? = null
 
     /**
+     * 宿主大文件句柄仓库提供者（app 层注入，流式上传/下载用）。
+     *
+     * 必须与 [httpHostApiFactory] 返回的实例共享同一仓库：backup 扩展点登记的备份包句柄，
+     * 由 `host.http.upload` 侧解析；否则句柄解析不到（上传报"源不存在"）。
+     */
+    @Volatile
+    var blobStoreFactory: ((pluginId: String) -> com.kingzcheung.xime.plugin.core.js.http.BlobStore)? = null
+
+    /**
      * 宿主 SSE 流式 HTTP 白名单 API 提供者（app 层注入，AI 长文本流式生成等插件使用）。
      * 工厂参数为插件 id，宿主据此校验域名白名单与用户授权（同 httpHostApiFactory）。
      */

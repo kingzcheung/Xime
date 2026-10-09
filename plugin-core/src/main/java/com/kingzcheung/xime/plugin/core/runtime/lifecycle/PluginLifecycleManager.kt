@@ -205,7 +205,9 @@ class PluginLifecycleManager(
                 PluginCategory.BACKUP ->
                     JsBackupPluginAdapter(
                         runtime = loadedPlugin.script ?: return null,
-                        pluginContext = pluginContext
+                        pluginContext = pluginContext,
+                        // 流式传输句柄仓库：与 host.http.upload/download 共享同一实例
+                        blobStore = PluginManager.blobStoreFactory?.invoke(plugin.id)
                     )
                 PluginCategory.TOOL ->
                     JsToolPluginAdapter(

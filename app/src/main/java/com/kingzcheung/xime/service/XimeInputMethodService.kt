@@ -101,6 +101,7 @@ import com.kingzcheung.xime.rime.resolveRimeCandidateIndex
 import com.kingzcheung.xime.settings.SchemaConfigHelper
 import com.kingzcheung.xime.settings.SchemaManager
 import com.kingzcheung.xime.settings.SettingsPreferences
+import com.kingzcheung.xime.settings.SyncManager
 import com.kingzcheung.xime.ui.keyboard.KeyboardView
 import com.kingzcheung.xime.ui.keyboard.isT9Schema
 import com.kingzcheung.xime.ui.keyboard.isHandwritingSchema
@@ -715,6 +716,14 @@ class XimeInputMethodService : InputMethodService(), LifecycleOwner, SavedStateR
                     FileLogger.w(TAG, "initRimeEngine: Session not ready after 60s, continuing in background")
                 }
                 notifyDeploymentStatus(false, "")
+
+                // 恢复备份时若引擎未就绪，自造词快照只落了盘没合并：此处补做一次 sync
+                // （librime 按时间戳合并，不会吃掉本机新词）。失败保留标记，下次引擎就绪再试。
+                if (SettingsPreferences.isPendingDictMerge(this@XimeInputMethodService)) {
+                    val merged = SyncManager.syncNow(this@XimeInputMethodService).isSuccess
+                    FileLogger.i(TAG, "initRimeEngine: pending 自造词快照合并=$merged")
+                    if (merged) SettingsPreferences.setPendingDictMerge(this@XimeInputMethodService, false)
+                }
 
                 withContext(Dispatchers.Main) {
                     val savedSchema = SettingsPreferences.getCurrentSchema(this@XimeInputMethodService)
