@@ -356,6 +356,34 @@ class JsWebdavClipboardSyncPluginTest {
         assertFalse("404 视为连接成功", error.orEmpty().contains("失败"))
     }
 
+    /**
+     * 回归（issue #1061）：设置页「测试连接」按钮的 key 是宿主能力动作
+     * `testConnection`，必须路由到 `clipboardSync.test()` 真正发起请求
+     * （此前按钮被当成顶层函数查找，落空后静默提示"成功"）。
+     */
+    @Test
+    fun `settings testConnection action actually issues PROPFIND`() {
+        val store = InMemoryConfigStore()
+        store.set("davUrl", "https://192.168.1.50:8080/dav/")
+        val http = MockHttpHostApi()
+        http.responseQueue.addLast(HttpResponse(401))
+        val adapter = newAdapter(store, http)
+
+        val error = runBlocking { adapter.onAction("testConnection") }
+
+        assertTrue("应报告认证失败: $error", error.orEmpty().contains("认证失败"))
+        assertEquals("按钮必须真的发一次请求", 1, http.requests.size)
+        assertEquals("PROPFIND", http.requests[0].first)
+    }
+
+    /** 未知动作 id 必须报错，不允许静默"成功"。 */
+    @Test
+    fun `unknown settings action is reported instead of silent success`() {
+        val adapter = newAdapter(InMemoryConfigStore(), MockHttpHostApi())
+        val error = runBlocking { adapter.onAction("noSuchAction") }
+        assertTrue("未知动作应返回错误消息: $error", error.orEmpty().contains("未知操作"))
+    }
+
     @Test
     fun `push returns false when url not configured`() {
         val adapter = newAdapter(InMemoryConfigStore(), MockHttpHostApi())

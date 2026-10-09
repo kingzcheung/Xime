@@ -463,10 +463,19 @@ private fun UiNodeEditor(
                     }
                     buttonBusy = true
                     scope.launch {
-                        val error = withContext(Dispatchers.IO) {
-                            runCatching { plugin.onAction(action.toString()) }.getOrNull()
+                        // 结果语义：null/空 = 成功（动作无错误消息）；非空 = 失败原因。
+                        // 抛异常也必须报错——曾经 runCatching{}.getOrNull() 把异常吞成 null，
+                        // 于是动作报错也会提示"成功"（issue #1061 假成功的一半来源）。
+                        val outcome = withContext(Dispatchers.IO) {
+                            runCatching { plugin.onAction(action) }
                         }
                         buttonBusy = false
+                        val failure = outcome.exceptionOrNull()
+                        val error = if (failure != null) {
+                            "执行失败：${failure.message ?: failure.javaClass.simpleName}"
+                        } else {
+                            outcome.getOrNull()
+                        }
                         if (error.isNullOrBlank()) {
                             Toast.makeText(context, "成功", Toast.LENGTH_SHORT).show()
                         } else {

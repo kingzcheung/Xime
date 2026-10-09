@@ -108,6 +108,14 @@ object JsPluginContract {
     const val PATH_SETTINGS_SCHEMA = "settings.schema"
     const val PATH_SETTINGS_OPTIONS = "settings.options"
 
+    /**
+     * 设置表单里的「测试连接」按钮动作 id（UiNodeType.BUTTON 的 key）。
+     *
+     * 该动作**不是**插件顶层函数，而是宿主能力动作：backup / clipboardSync 两类插件
+     * 的能力接口都提供 `testConnection()`，由适配器把该 key 路由到能力方法。
+     */
+    const val ACTION_TEST_CONNECTION = "testConnection"
+
     // ---- 候选词变换（transform，hotPath） ----
     const val PATH_TRANSFORM_CANDIDATES = "transform.candidates"
 

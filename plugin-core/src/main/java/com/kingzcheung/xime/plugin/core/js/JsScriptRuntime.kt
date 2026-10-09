@@ -969,6 +969,16 @@ class JsScriptRuntime(
      * 任一级缺失或末级非函数返回 undefined（不抛 TypeError）。
      */
     private fun callExpr(path: String, argsJs: String): String {
+        return "(${functionGuardExpr(path)}) ? globalThis.plugin.$path($argsJs) : undefined"
+    }
+
+    /**
+     * 方法存在性守卫表达式（路径各级存在且末级为函数）。
+     *
+     * 用途：[callExpr] 与 [hasMethod]——调用不存在的方法不会抛 TypeError，
+     * 而 `typeof ... === 'function'` 是 JS 侧唯一可靠的"方法是否存在"判定。
+     */
+    private fun functionGuardExpr(path: String): String {
         val parts = path.split('.')
         val guards = ArrayList<String>()
         guards += "typeof globalThis.plugin !== 'undefined' && globalThis.plugin"
@@ -977,8 +987,31 @@ class JsScriptRuntime(
             acc = "$acc.${parts[i]}"
             guards += acc
         }
-        val fn = "globalThis.plugin.$path"
-        return "(${guards.joinToString(" && ")} && typeof $fn === 'function') ? $fn($argsJs) : undefined"
+        guards += "typeof globalThis.plugin.$path === 'function'"
+        return guards.joinToString(" && ")
+    }
+
+    /**
+     * 插件导出对象上是否存在指定路径的方法。
+     *
+     * 与 [call] / [callAsync] 的 null 返回值配合使用：这两个方法对"方法不存在"
+     * 与"方法返回 null"都返回 null（成功语义），仅凭返回值无法区分。设置页按钮
+     * 动作在派发前用它判定，避免"方法不存在"被上层误判为成功。
+     */
+    fun hasMethod(path: String): Boolean {
+        if (!loaded) return false
+        return try {
+            val result = runGuarded(callTimeoutMs, poisonOnTimeout = false) {
+                runBlocking { engine.evaluate<Any?>(functionGuardExpr(path), filename = entryScript) }
+            }
+            when (result) {
+                is GuardResult.Ok -> result.value as? Boolean ?: false
+                GuardResult.TimedOut -> false
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "hasMethod '$path' failed for $pluginId: ${e.message}", e)
+            false
+        }
     }
 
     /** 构造回调槽表达式：`plugin.onWsMessage(...)`；回调槽缺失静默 undefined。 */
