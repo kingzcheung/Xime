@@ -52,6 +52,7 @@ object SettingsPreferences {
     private const val KEY_RIME_INSTALLATION_ID = "rime_installation_id"
 
     private const val KEY_LAST_RIME_SYNC_AT = "last_rime_sync_at"
+    private const val KEY_LAST_BACKUP_AT = "last_backup_at"
 
     private const val KEY_MODE_CHANGE_TARGET = "mode_change_target"
 
@@ -566,6 +567,14 @@ object SettingsPreferences {
 
     fun setLastRimeSyncAt(context: Context, at: Long) {
         getPrefs(context).edit().putLong(KEY_LAST_RIME_SYNC_AT, at).apply()
+    }
+
+    /** 上次生成完整备份包的时间（云端立即备份或本地导出成功时更新；毫秒时间戳，0=从未）。 */
+    fun getLastBackupAt(context: Context): Long =
+        getPrefs(context).getLong(KEY_LAST_BACKUP_AT, 0L)
+
+    fun setLastBackupAt(context: Context, at: Long) {
+        getPrefs(context).edit().putLong(KEY_LAST_BACKUP_AT, at).apply()
     }
     
     /** 获取方案偏好的键盘布局，默认全键盘 */

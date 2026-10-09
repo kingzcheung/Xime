@@ -76,6 +76,8 @@ object RimeExportManager {
                 null
             }
 
+            // 生成了完整备份包即视为一次备份（本地导出与云备份共用此口径）
+            SettingsPreferences.setLastBackupAt(context, System.currentTimeMillis())
             return Result.success(ExportResult(resultUri, fileName, savedToDownloads))
         } catch (e: Exception) {
             android.util.Log.e(TAG, "exportArchive failed", e)

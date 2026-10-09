@@ -74,7 +74,11 @@ object BackupManager {
         return try {
             Log.i(TAG, "Backup: name=$fileName size=${archive.length()}")
             val result = plugin.pushBackup(fileName, archive)
-            if (result.ok && dictSnapshotNote != null) result.copy(message = dictSnapshotNote) else result
+            if (result.ok) {
+                // 上传成功即一次完整备份，刷新卡片状态
+                SettingsPreferences.setLastBackupAt(context, System.currentTimeMillis())
+                if (dictSnapshotNote != null) result.copy(message = dictSnapshotNote) else result
+            } else result
         } finally {
             archive.delete()
         }
