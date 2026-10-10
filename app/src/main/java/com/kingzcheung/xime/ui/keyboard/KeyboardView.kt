@@ -641,10 +641,11 @@ fun KeyboardView(
                 }
                 // 九键左栏复刻：输入/选择态显示音节拼音候选（与键盘左栏同源，
                 // 点击切换音节后服务层重拉全量候选刷新本页），空闲态回落 side_symbols；
-                // 左栏宽度与九键键盘左栏视觉同宽：九键竖屏根容器有左右各 4dp 边距
+                // 左栏宽度 = 九键键盘左栏列宽：九键竖屏根容器有左右各 4dp 边距
                 // （padding start/end 4dp），Row 内 spacedBy(2dp)×2，weight 基数 =
-                // 页宽-8-4；左栏列 = 基数×0.8/5，面板再带 LocalKeyVisualPadding
-                // 水平缩进（keySpacingX ?: 2dp）——展开页左栏为全宽背景，同额扣除
+                // 页宽-8-4，左栏列 = 基数×0.8/5（浮点不取整，取整会有 ±1dp 背景宽度差）。
+                // 水平缩进（keySpacingX）由展开页容器自理——与键盘态面板的
+                // LocalKeyVisualPadding 同源，展开/收起切换背景块尺寸不变
                 // （横屏九键无左栏不缩放）。
                 // 页宽基准：悬浮模式展开页渲染在卡片内（0.85×短边宽），必须按卡片宽
                 // 计算——此前用全屏 screenWidthDp，横屏悬浮下左栏 ≈0.16×长边，占掉
@@ -656,14 +657,21 @@ fun KeyboardView(
                 }
                 val isT9Layout = keyboardState is KeyboardLayoutState.T9Pinyin
                 val t9RailWidthDp = if (isT9Layout && !isLandscape) {
-                    val railInset = kbKey.spacingFor("t9").first ?: 2f
-                    ((expandedPageWidthDp - 12) * 0.8f / 5f -
-                        railInset * 2f + 0.5f).toInt().coerceAtLeast(32)
-                } else 0
+                    ((expandedPageWidthDp - 12) * 0.8f / 5f).coerceAtLeast(32f)
+                } else 0f
                 // 左栏垂直缩进与九键左栏面板同源（keySpacingY ?: 2dp），展开/收起
                 // 切换时左栏顶部不跳位；其余布局 6dp = 原 Row 垂直边距
                 val t9RailInsetDp = if (isT9Layout && !isLandscape)
                     (kbKey.spacingFor("t9").second ?: 2f).toInt() else 6
+                // 左栏水平缩进与九键面板 LocalKeyVisualPadding 同源（keySpacingX ?: 2dp）
+                val t9RailInsetXDp = if (isT9Layout && !isLandscape)
+                    kbKey.spacingFor("t9").first ?: 2f else 0f
+                // 键位视觉缩进垂直分量（keySpacingY ?: 2dp）：列表容器/切换键在键位区内缩
+                val t9RailInsetYDp = if (isT9Layout && !isLandscape)
+                    kbKey.spacingFor("t9").second ?: 2f else 0f
+                // 键位区底部留白 = 九键键盘根容器的 bottom=8dp（T9KeyboardLayout 竖屏分支），
+                // 对齐其符号键底边
+                val t9RailBottomInsetDp = if (isT9Layout && !isLandscape) 8 else 0
                 val railPinyinOptions =
                     if (isT9Layout) t9Controller.firstOptions.map { it.pinyin } else emptyList()
                 val railSelectedPinyinIndex =
@@ -705,6 +713,15 @@ fun KeyboardView(
                         railSymbols = customRailSymbols.orEmpty(),
                         leftRailWidthDp = t9RailWidthDp,
                         leftRailInsetDp = t9RailInsetDp,
+                        leftRailInsetXDp = t9RailInsetXDp,
+                        leftRailInsetYDp = t9RailInsetYDp,
+                        leftRailBottomInsetDp = t9RailBottomInsetDp,
+                        // 右栏列宽与九键右列同公式（右列/左列同为 0.8/5 权重）
+                        rightRailWidthDp = t9RailWidthDp,
+                        // 阴影仅九键竖屏左栏复刻（其余布局左栏历来无阴影，保持原样）
+                        railShadowEnabled = isT9Layout && !isLandscape && kbShadow.enabled,
+                        railShadowElevationDp = kbShadow.elevation.toFloat(),
+                        railShadowRadiusDp = kbShadow.shapeRadius.toFloat(),
                         railPinyinOptions = railPinyinOptions,
                         railSelectedPinyinIndex = railSelectedPinyinIndex,
                         railAccentColor = accentColor,
