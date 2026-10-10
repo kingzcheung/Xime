@@ -2,6 +2,7 @@ package com.kingzcheung.xime.ui.settings
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
@@ -23,6 +24,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -36,8 +38,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -96,45 +98,50 @@ fun SpeechToTextSettingsContent(
         mutableStateOf(SettingsPreferences.isSttKeepEngineAlive(context))
     }
 
-    val onlineProviders = remember(activeAsrPluginId) {
-        val installedAsr = ExtensionManager.getAllInstalledPlugins()
-            .filter { it.category == PluginCategory.ASR }
-        mutableStateListOf<AsrProvider>().apply {
-            installedAsr.forEach { info ->
-                val instance = PluginManager.getPluginInstance(info.id) as? AsrPlugin
-                if (instance != null) {
-                    val caps = instance.getCapabilities()
-                    add(
-                        AsrProvider(
-                            id = info.id,
-                            name = info.name,
-                            description = "在线语音识别插件",
-                            isOnline = true,
-                            isConfigured = instance.isConfigured(),
-                            isActive = info.id == activeAsrPluginId,
-                            pluginIcon = ExtensionManager.extractPluginIcon(context, info.id, instance, info),
-                            features = buildList {
-                                add(if (caps.inputMode == "streaming") "实时流式" else "文件识别")
-                                if (caps.supportsPartialResults) add("中间结果")
-                                if (caps.requiresNetwork) add("在线")
-                            }
-                        )
-                    )
-                } else {
-                    add(
-                        AsrProvider(
-                            id = info.id,
-                            name = info.name,
-                            description = info.description.ifBlank { "在线语音识别插件" },
-                            isOnline = true,
-                            isConfigured = false,
-                            isActive = info.id == activeAsrPluginId,
-                            features = listOf("在线")
-                        )
-                    )
-                }
+    // 在线插件列表在 IO 组装：isConfigured()（→ 插件 settings.schema）与 extractPluginIcon
+    // 都会进插件运行时（QuickJS）。组合期同步调用既阻塞主线程，又会与插件卸载/重载的
+    // runtime.close() 竞态（v3.1.0 真机 record："调用 settings.schema: Already closed"）。
+    var onlineProviders by remember { mutableStateOf<List<AsrProvider>>(emptyList()) }
+    var providersLoaded by remember { mutableStateOf(false) }
+    LaunchedEffect(activeAsrPluginId) {
+        val built = runCatching {
+            withContext(Dispatchers.IO) {
+                ExtensionManager.getAllInstalledPlugins()
+                    .filter { it.category == PluginCategory.ASR }
+                    .map { info ->
+                        val instance = PluginManager.getPluginInstance(info.id) as? AsrPlugin
+                        if (instance != null) {
+                            val caps = instance.getCapabilities()
+                            AsrProvider(
+                                id = info.id,
+                                name = info.name,
+                                description = "在线语音识别插件",
+                                isOnline = true,
+                                isConfigured = instance.isConfigured(),
+                                isActive = info.id == activeAsrPluginId,
+                                pluginIcon = ExtensionManager.extractPluginIcon(context, info.id, instance, info),
+                                features = buildList {
+                                    add(if (caps.inputMode == "streaming") "实时流式" else "文件识别")
+                                    if (caps.supportsPartialResults) add("中间结果")
+                                    if (caps.requiresNetwork) add("在线")
+                                }
+                            )
+                        } else {
+                            AsrProvider(
+                                id = info.id,
+                                name = info.name,
+                                description = info.description.ifBlank { "在线语音识别插件" },
+                                isOnline = true,
+                                isConfigured = false,
+                                isActive = info.id == activeAsrPluginId,
+                                features = listOf("在线")
+                            )
+                        }
+                    }
             }
-        }
+        }.getOrElse { emptyList() }
+        onlineProviders = built
+        providersLoaded = true
     }
 
     Scaffold(
@@ -244,30 +251,40 @@ fun SpeechToTextSettingsContent(
             Spacer(modifier = Modifier.height(8.dp))
 
             if (!useLocal) {
-                OnlineAsrTab(
-                    providers = onlineProviders,
-                    activeProviderId = activeAsrPluginId,
-                    onProviderSelect = { provider ->
-                        val wasConfigured = provider.isConfigured
-                        scope.launch(Dispatchers.IO) {
-                            // 单选激活：同一时间只能使用 1 个在线 ASR 插件
-                            ExtensionManager.getAllInstalledPlugins()
-                                .filter { it.category == PluginCategory.ASR && it.id != provider.id }
-                                .forEach { SettingsPreferences.setPluginEnabled(context, it.id, false) }
-                            SettingsPreferences.setSttOnlinePluginId(context, provider.id)
-                            SettingsPreferences.setPluginEnabled(context, provider.id, true)
-                            PluginManager.launchPlugin(provider.id)
-                            activeAsrPluginId = provider.id
-                            if (!wasConfigured) {
-                                withContext(Dispatchers.Main) {
-                                    onNavigateToPluginSettings(provider.id)
+                if (!providersLoaded) {
+                    // 首次组装还在 IO：给加载态，避免闪一下"未选择服务"
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator()
+                    }
+                } else {
+                    OnlineAsrTab(
+                        providers = onlineProviders,
+                        activeProviderId = activeAsrPluginId,
+                        onProviderSelect = { provider ->
+                            val wasConfigured = provider.isConfigured
+                            scope.launch(Dispatchers.IO) {
+                                // 单选激活：同一时间只能使用 1 个在线 ASR 插件
+                                ExtensionManager.getAllInstalledPlugins()
+                                    .filter { it.category == PluginCategory.ASR && it.id != provider.id }
+                                    .forEach { SettingsPreferences.setPluginEnabled(context, it.id, false) }
+                                SettingsPreferences.setSttOnlinePluginId(context, provider.id)
+                                SettingsPreferences.setPluginEnabled(context, provider.id, true)
+                                PluginManager.launchPlugin(provider.id)
+                                activeAsrPluginId = provider.id
+                                if (!wasConfigured) {
+                                    withContext(Dispatchers.Main) {
+                                        onNavigateToPluginSettings(provider.id)
+                                    }
                                 }
                             }
-                        }
-                    },
-                    onManagePlugins = onNavigateToPlugins,
-                    onSettings = onNavigateToPluginSettings
-                )
+                        },
+                        onManagePlugins = onNavigateToPlugins,
+                        onSettings = onNavigateToPluginSettings
+                    )
+                }
             }
         }
     }

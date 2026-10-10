@@ -93,6 +93,9 @@ class JsScriptRuntime(
         /** 插件业务调用（load/call/onLoad/onUnload）超时；超时后插件标记中毒不再执行。 */
         private const val CALL_TIMEOUT_MS = 180_000L
 
+        /** JS 执行线程名前缀（[executor] 单线程）：[awaitIdle] 据此避免自等死锁。 */
+        private const val JS_THREAD_PREFIX = "xime-js-"
+
         /** 网络回调（SSE/WS 事件）超时：回调应短促，恶意死循环回调兜底。 */
         private const val CALLBACK_TIMEOUT_MS = 5_000L
 
@@ -202,7 +205,7 @@ class JsScriptRuntime(
 
     /** 网络回调槽（SSE/WS 事件）投递线程：与业务调用共享单线程执行器（串行）。 */
     private val executor = Executors.newSingleThreadExecutor { r ->
-        Thread(r, "xime-js-$pluginId").apply { isDaemon = true }
+        Thread(r, JS_THREAD_PREFIX + pluginId).apply { isDaemon = true }
     }
 
     /**
@@ -231,6 +234,22 @@ class JsScriptRuntime(
 
     @Volatile
     private var loaded = false
+
+    /**
+     * 关闭标志：[close] 一开始就置位，此后一切调用按"无结果"处理，不再触碰引擎。
+     *
+     * 关闭与调用天然并发（设置页在组合期读 settings.schema，而插件可能正在被停用/重载）。
+     * 旧实现只在 close() 末尾清 [loaded]，并直接 engine.close() + shutdownNow()：
+     * 竞态窗口内被受理的调用会落到已关闭的引擎上，抛出
+     * `QuickJsException: Already closed`，被记成"[脚本错误] 调用 settings.schema"，
+     * 误导用户去更新插件；队列里尚未开始的调用则被 shutdownNow 取消，又被
+     * [isInterruptLike] 判成超时并让插件中毒。
+     */
+    @Volatile
+    private var closed = false
+
+    /** 关闭期间被受理的调用：Callable 内二次判定后抛出，转为"无结果"（无栈，零开销）。 */
+    private class RuntimeClosedSignal : RuntimeException(null, null, false, false)
 
     @Volatile
     private var poisoned = false
@@ -993,15 +1012,23 @@ class JsScriptRuntime(
         binaries: List<ByteArray> = emptyList(),
         block: () -> T,
     ): GuardResult<T> {
-        if (poisoned) return GuardResult.TimedOut
-        val future = executor.submit(Callable {
-            pendingBinaryArgs = binaries
-            try {
-                block()
-            } finally {
-                pendingBinaryArgs = emptyList()
-            }
-        })
+        if (poisoned || closed) return GuardResult.TimedOut
+        val future = try {
+            executor.submit(Callable {
+                // 二次判定：任务真正开始执行时运行时可能已关闭。[close] 的屏障只保证
+                // "已开始的调用"先于引擎关闭结束，不保证"提交"与"关闭"之间没有窗口。
+                if (closed) throw RuntimeClosedSignal()
+                pendingBinaryArgs = binaries
+                try {
+                    block()
+                } finally {
+                    pendingBinaryArgs = emptyList()
+                }
+            })
+        } catch (e: java.util.concurrent.RejectedExecutionException) {
+            // 执行器已随关闭销毁：这不是脚本错误，按"无结果"处理。
+            return GuardResult.TimedOut
+        }
         return try {
             GuardResult.Ok(future.get(timeoutMs, TimeUnit.MILLISECONDS))
         } catch (e: TimeoutException) {
@@ -1010,11 +1037,26 @@ class JsScriptRuntime(
             GuardResult.TimedOut
         } catch (e: Exception) {
             future.cancel(true)
+            // 关闭引发的失败（关闭信号 / 引擎已关闭 / shutdownNow 取消排队任务）：
+            // 一律按"无结果"处理，既不记脚本错误也不中毒。
+            if (closed || isClosedLike(e)) return GuardResult.TimedOut
             // QuickJsInterruptedException 或中断引发的 CancellationException 视为超时
             if (isInterruptLike(e))
                 interruptAndPoison(poisonOnTimeout)
             throw e
         }
+    }
+
+    /** 是否为"运行时已关闭"引发的失败（关闭信号 / 执行器拒绝 / 引擎已关闭）。 */
+    private fun isClosedLike(e: Throwable): Boolean {
+        var cur: Throwable? = e
+        while (cur != null) {
+            if (cur is RuntimeClosedSignal) return true
+            if (cur is java.util.concurrent.RejectedExecutionException) return true
+            if (cur is QuickJsException && cur.message.orEmpty().contains("closed", ignoreCase = true)) return true
+            cur = cur.cause
+        }
+        return false
     }
 
     private fun isInterruptLike(e: Throwable): Boolean {
@@ -1086,7 +1128,7 @@ class JsScriptRuntime(
      * 动作在派发前用它判定，避免"方法不存在"被上层误判为成功。
      */
     fun hasMethod(path: String): Boolean {
-        if (!loaded) return false
+        if (!loaded || closed) return false
         return try {
             val result = runGuarded(callTimeoutMs, poisonOnTimeout = false) {
                 runBlocking { engine.evaluate<Any?>(functionGuardExpr(path), filename = entryScript) }
@@ -1283,7 +1325,7 @@ class JsScriptRuntime(
 
     /** 生命周期调用（async 感知：插件可声明 async onLoad/onUnload，宿主等到 settle）。 */
     private fun invokeLifecycle(name: String) {
-        if (!loaded || poisoned) return
+        if (!loaded || poisoned || closed) return
         try {
             runGuarded(callTimeoutMs, poisonOnTimeout = true) {
                 runBlocking {
@@ -1307,7 +1349,7 @@ class JsScriptRuntime(
      * @return JS 返回值（已转纯 Kotlin 结构）；方法不存在 / 报错 / 超时返回 null
      */
     fun call(name: String, vararg args: Any?): Any? {
-        if (!loaded) return null
+        if (!loaded || closed) return null
         return try {
             val (argsJs, binaries) = argsExpr(args.toList())
             val expr = callExpr(name, argsJs)
@@ -1338,7 +1380,7 @@ class JsScriptRuntime(
      * @return 返回值（已转纯 Kotlin 结构）；方法不存在 / rejected / 报错 / 超时返回 null
      */
     fun callAsync(name: String, vararg args: Any?): Any? {
-        if (!loaded) return null
+        if (!loaded || closed) return null
         return try {
             val (argsJs, binaries) = argsExpr(args.toList())
             val invoke = callExpr(name, argsJs)
@@ -1410,9 +1452,14 @@ class JsScriptRuntime(
     }
 
     fun close() {
+        if (closed) return
         try {
+            // onUnload 需要引擎可用：必须在置 [closed] 之前跑完。
             callOnUnload()
         } finally {
+            // 1) 先置关闭标志并清 loaded：此后到达的调用一律按"无结果"返回，不再投递。
+            closed = true
+            loaded = false
             eventScope?.cancel()
             eventScope = null
             eventChannel?.close()
@@ -1420,13 +1467,32 @@ class JsScriptRuntime(
             subscribedEvents = emptySet()
             activeSseSessions.forEach { sseHostApi?.close(it) }
             activeSseSessions.clear()
+            // 2) 等已受理的调用跑完，再关引擎：避免引擎在 JS 执行中被关闭
+            //    （旧实现先 engine.close() 再 shutdownNow：正在执行的调用报
+            //    "Already closed"，排队中的调用被取消并被误判为超时中毒）。
+            awaitIdle()
             try {
                 engine.close()
             } catch (_: Exception) {
             }
             executor.shutdownNow()
             asyncJobExecutor.shutdownNow()
-            loaded = false
+        }
+    }
+
+    /**
+     * 等待 [executor] 上已受理的调用结束（单线程 FIFO：投递空任务即屏障）。
+     *
+     * 关闭阶段投递的调用会被 [closed] 拦下，故屏障只会等到"关闭前已开始"的调用。
+     * 等待上限与 [callTimeoutMs] 同量级；真死循环的插件由超时路径中断，不会永久挂住。
+     */
+    private fun awaitIdle() {
+        // close() 若由 JS 线程自身调用（onUnload 路径），投递屏障会自等死锁。
+        if (Thread.currentThread().name.startsWith(JS_THREAD_PREFIX)) return
+        try {
+            executor.submit(Callable { }).get(callTimeoutMs, TimeUnit.MILLISECONDS)
+        } catch (_: Exception) {
+            // 等待失败/超时：不再等待，按既有语义继续关闭
         }
     }
 }

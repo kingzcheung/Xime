@@ -81,11 +81,11 @@ fun PluginConfigFormScreen(
     val configStore = remember(pluginId) {
         PluginConfigStoreImpl(context.applicationContext as android.app.Application, pluginId)
     }
-    val fields = remember(schema, plugin) {
-        if (schema.isNotEmpty()) schema else {
-            runCatching { plugin.getSettingsSchema() }.getOrElse { emptyList() }
-        }
-    }
+    // 调用方已带 schema（插件设置页已在 IO 读完）时直接用；否则本组件自己在 IO 读：
+    // 组合期不进插件运行时（旧的 remember 同步调用会阻塞主线程，并与插件卸载/重载竞态）。
+    val needLoad = schema.isEmpty()
+    val fallbackState = rememberPluginSettingsSchema(if (needLoad) plugin else null, pluginId)
+    val fields = if (needLoad) fallbackState.schema else schema
     val groupedFields = remember(fields) { fields.groupBy { it.section.orEmpty() } }
 
     val dynamicOptions = remember(plugin) { mutableStateMapOf<String, List<String>>() }
