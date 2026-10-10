@@ -51,6 +51,24 @@ class KeyboardT9StrokeGestureTest {
     }
 
     @Test
+    fun `t9 keys 支持左右滑绑定`() {
+        val keys = KeysConfigHelper.parseKeyboardYamlSection(
+            """
+            keyboard:
+              t9:
+                keys:
+                  "7": { swipe_left: { label: "行首", action: "line_start" }, swipe_right: { action: "command", value: "clear_composition" } }
+            """.trimIndent(),
+            "t9",
+        )
+        val kc = keys!!["7"]!!
+        assertEquals(GestureAction.LINE_START, kc.swipeLeft!!.action)
+        assertEquals("行首", kc.swipeLeft!!.label)
+        assertEquals(GestureAction.COMMAND, kc.swipeRight!!.action)
+        assertEquals("clear_composition", kc.swipeRight!!.value)
+    }
+
+    @Test
     fun `t9 keys 段落在 side_symbols 之外互不干扰`() {
         val keys = KeysConfigHelper.parseKeyboardYamlSection(
             """
@@ -180,6 +198,16 @@ class KeyboardT9StrokeGestureTest {
         // 内置默认仅上滑输数字；下滑全部留空，由用户在 xime.custom.yaml 按键级配置
         for (d in '1'..'9') {
             assertNull("t9.keys $d 下滑应留空供自定义", keys[d.toString()]?.swipeDown)
+        }
+    }
+
+    @Test
+    fun `内置 t9 keys 默认不绑定左右滑`() {
+        val keys = loadAssetSection("t9")
+        // 左右滑默认留空：横向滑动保持移动光标；配了左右滑的键才接管横向滑动
+        for (d in '1'..'9') {
+            assertNull("t9.keys $d 左滑应留空供自定义", keys[d.toString()]?.swipeLeft)
+            assertNull("t9.keys $d 右滑应留空供自定义", keys[d.toString()]?.swipeRight)
         }
     }
 

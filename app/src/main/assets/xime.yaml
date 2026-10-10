@@ -706,9 +706,13 @@ keyboard:
       - "！"
     # ── 数字键手势（可自定义：在 xime.custom.yaml 的 keyboard.t9.keys 同路径覆盖）──
     # 键 id 为数字字符串 "1"~"9"（也可为 layout 中出现的自定义键 id）。
-    # 内置默认：上滑直接输入键面数字（无需切数字键盘）；下滑内置不绑定动作，
+    # 内置默认：上滑直接输入键面数字（无需切数字键盘）；下滑/左滑/右滑内置不绑定动作，
     # 可按键级自行配置（如 swipe_down: { label: "复制", action: "copy" }，
     # 或 switch_route: clipboard 打开剪贴板面板）。
+    # 左右滑默认不绑定：横向滑动仍用于移动光标；某键配置了 swipe_left/swipe_right 后，
+    # 该键上的横向滑动即由按键接管（执行配置动作），不再移动光标（未配置的键不受影响）。
+    # 提示显示：上/下/左/右滑的 label 均按 display 画在键面（上=键上方、下=键下方、
+    # 左/右=键边缘与居中主字符之间的空档正中）；display: bubble 时不印键面。
     # 动作可选值见 GestureAction：commit/select_all/copy/cut/paste/line_start/line_end/
     # undo/repeat/command/switch_route（value: emoji|symbol|clipboard 打开对应面板）等；
     # display 只管静态提示位置：key（画在键面）/ bubble（不画键面，留给气泡）/ both；
