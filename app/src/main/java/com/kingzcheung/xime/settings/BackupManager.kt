@@ -10,12 +10,13 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 
 /**
- * 云备份引擎：备份包的生成与恢复在宿主，传输协议由 [BackupPlugin] 的 Lua 实现承载。
+ * 云备份引擎：备份包的生成与恢复在宿主，传输协议由 [BackupPlugin] 的 JS 实现承载。
  *
  * 分工（与剪贴板同步的 ClipboardSyncBridge 同构）：
- * - 备份 = [RimeExportManager.buildArchive] 打包 → plugin.pushBackup 上传
- * - 恢复 = plugin.pullBackup 下载 zip → [restoreArchive] 校验路由落盘
- * - 插件永不接触宿主文件系统：Lua 侧只拿到/交回 zip 字节流
+ * - 备份 = [RimeExportManager.buildArchiveToFile] 流式打包到 cacheDir → 插件 pushBackup
+ * - 恢复 = 插件 pullBackup（宿主流式下载到缓存文件）→ [restoreArchive] 校验路由落盘 → 释放句柄
+ * - 插件永不接触宿主文件系统：JS 侧只拿到/交回**不透明 blob 句柄**，字节由宿主流式读写
+ *   （大包不经过 JS 堆，避免整包 base64 进 JS 源码导致 OOM）
  *
  * 备份包格式（v1，兼容旧格式：`_xime_backup/` 前缀外的条目一律视为 rime 目录相对路径）：
  * - rime 目录文件（含 librime userdb 与 t9_digit.userdb，即自造词）在包根
@@ -40,17 +41,47 @@ object BackupManager {
 
     private const val PREFS_PREFIX_PLUGIN_CFG = "plugin_cfg_"
 
-    /** 云备份到远端。返回 BackupResult（失败含原因）。 */
+    /** 方案清单条目（仅完整方案档）：文件所有权/校验记录，随方案本体一起恢复。 */
+    private const val SCHEME_REGISTRY_ENTRY = "schemas/registry.json"
+    private const val SCHEME_MANIFESTS_ENTRY = "schemas/manifests/"
+
+    /** v3 插件注册表条目（仅完整方案档，与插件包同档）：安装记录 + 启用状态。 */
+    private const val PLUGINS_REGISTRY_ENTRY = "plugins.json"
+
+    /**
+     * 云备份到远端。返回 BackupResult（失败含原因）。
+     *
+     * 打包前先触发一次引擎 sync：librime 把各 userdb 导出成
+     * `rime/sync/<installation_id>/` 下的 `*.userdb.txt` 文本快照，随包上传（恢复侧再合并）。
+     * 引擎未就绪时按"仅打包现有快照"降级，并在成功消息里说明，不阻断备份。
+     */
     suspend fun backupNow(
         context: Context,
-        plugin: BackupPlugin,
-        mode: ExportMode
+        plugin: BackupPlugin
     ): com.kingzcheung.xime.plugin.core.api.BackupResult {
-        val archive = RimeExportManager.buildArchive(context, mode)
+        // 先刷新自造词快照（引擎未就绪则用现有快照并在成功消息里说明）
+        val dictSnapshotNote = if (SyncManager.syncNow(context).isSuccess) {
+            Log.i(TAG, "Backup: 自造词快照已刷新")
+            null
+        } else {
+            Log.w(TAG, "Backup: 引擎未就绪，使用现有自造词快照（可能非最新）")
+            "（自造词快照未刷新：需先唤起键盘一次）"
+        }
+
+        // 流式打包到 cacheDir：包体不驻留内存（含方案词典与插件包时可达数十 MB）
+        val (fileName, archive) = RimeExportManager.buildArchiveToFile(context)
             .getOrElse { return com.kingzcheung.xime.plugin.core.api.BackupResult(ok = false, message = it.message) }
-        val (fileName, bytes) = archive
-        Log.i(TAG, "Backup: name=$fileName size=${bytes.size} mode=$mode")
-        return plugin.pushBackup(fileName, bytes)
+        return try {
+            Log.i(TAG, "Backup: name=$fileName size=${archive.length()}")
+            val result = plugin.pushBackup(fileName, archive)
+            if (result.ok) {
+                // 上传成功即一次完整备份，刷新卡片状态
+                SettingsPreferences.setLastBackupAt(context, System.currentTimeMillis())
+                if (dictSnapshotNote != null) result.copy(message = dictSnapshotNote) else result
+            } else result
+        } finally {
+            archive.delete()
+        }
     }
 
     /** 列出远端备份条目（透传插件；失败返回 null）。 */
@@ -60,27 +91,131 @@ object BackupManager {
     suspend fun deleteRemote(plugin: BackupPlugin, id: String): Boolean = plugin.deleteBackup(id)
 
     /**
-     * 从远端恢复：下载备份包并按条目前缀路由落盘。
+     * 从远端恢复：宿主流式下载到缓存文件 → 按条目前缀路由落盘 → 释放句柄。
+     *
+     * 落盘后还有两步收尾（[afterRestore]）：包内含自造词快照时触发引擎 sync 合并
+     * （引擎未就绪则记 pending，等引擎起来再合并）；并把 default.custom.yaml 里的
+     * 启用方案列表重新镜像进 default.yaml。
      *
      * @return 成功 true；失败返回错误消息
      */
     suspend fun restore(context: Context, plugin: BackupPlugin, id: String): Result<Unit> {
-        val bytes = plugin.pullBackup(id)
+        val download = plugin.pullBackup(id)
             ?: return Result.failure(Exception("下载备份包失败"))
-        return restoreArchive(context, bytes)
+        return try {
+            restoreFromArchive(context, download.file)
+        } finally {
+            // 恢复完释放落盘句柄（删除宿主缓存文件；幂等）
+            plugin.releaseBackup(download.blobId)
+        }
+    }
+
+    /**
+     * 从本地文件导入完整方案包（覆盖式恢复；[isBackupPackage] 判定后的入口）。
+     *
+     * 大包不走内存：先流式拷进 cacheDir 临时文件再解包，用完删除。
+     */
+    suspend fun importLocal(context: Context, uri: android.net.Uri): Result<Unit> {
+        val temp = File(File(context.cacheDir, "local-import").apply { mkdirs() }, "package.zip")
+        return try {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                temp.outputStream().use { output -> input.copyTo(output) }
+            } ?: return Result.failure(Exception("无法读取所选文件"))
+            if (!isBackupPackage(temp)) {
+                return Result.failure(
+                    IllegalArgumentException("这不是完整方案包（缺少 ${META_PREFIX} 元数据）；词条快照请用「导入快照」")
+                )
+            }
+            restoreFromArchive(context, temp)
+        } catch (e: Exception) {
+            Log.e(TAG, "importLocal failed", e)
+            Result.failure(e)
+        } finally {
+            temp.delete()
+        }
+    }
+
+    /** 判定一个 zip 是否是本应用的备份包（看中央目录里有没有 `_xime_backup/` 条目，不解压）。 */
+    fun isBackupPackage(archive: File): Boolean {
+        if (!archive.isFile) return false
+        return try {
+            java.util.zip.ZipFile(archive).use { zip ->
+                zip.entries().asSequence().any { it.name.startsWith(META_PREFIX) }
+            }
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /** 备份包落盘 + 收尾（云端恢复与本地导入共用）。 */
+    internal suspend fun restoreFromArchive(context: Context, archive: File): Result<Unit> {
+        val outcome = restoreArchiveOutcome(
+            context.filesDir,
+            { prefsName, json ->
+                restorePrefsJson(context.getSharedPreferences(prefsName, Context.MODE_PRIVATE), json)
+            },
+            archive
+        ).onSuccess {
+            Log.i(TAG, "Restore done -> ${context.filesDir.path}")
+        }.onFailure { e ->
+            Log.e(TAG, "restoreArchive failed", e)
+        }
+        return outcome.map { afterRestore(context, it) }
+    }
+
+    /**
+     * 恢复后收尾：自造词快照合并 + 启用方案列表镜像。
+     *
+     * 词库不直接覆盖 leveldb，而是把 `sync/<installation_id>/` 下的 `*.userdb.txt` 交给 librime
+     * 按时间戳合并（与词库同步同语义）：备份后本机新打的词不会被旧备份吃掉。
+     * 引擎未就绪（冷启动直接进设置页）时记 pending 标记，由 IME 服务引擎就绪后补做。
+     */
+    private suspend fun afterRestore(context: Context, outcome: RestoreOutcome) {
+        if (outcome.dictSnapshotCount > 0) {
+            if (SyncManager.syncNow(context).isSuccess) {
+                Log.i(TAG, "Restore: 自造词快照已合并（${outcome.dictSnapshotCount} 个文件）")
+                SettingsPreferences.setPendingDictMerge(context, false)
+            } else {
+                Log.w(TAG, "Restore: 引擎未就绪，自造词快照待合并（pending）")
+                SettingsPreferences.setPendingDictMerge(context, true)
+            }
+        }
+        // default.custom.yaml 已随包恢复（启用方案列表）：重新镜像进 default.yaml。
+        // default.yaml 本身不进包（派生基座），避免恢复时把旧版本基座一起盖回来。
+        try {
+            SchemaManager.applyEnabledSchemasToDefaultYaml(context)
+        } catch (e: Exception) {
+            Log.e(TAG, "Restore: 重新镜像 schema_list 失败", e)
+        }
     }
 
     /** 校验 zip 条目路径并解压覆盖（rime 文件 + META 元数据路由），Android 入口。 */
-    fun restoreArchive(context: Context, bytes: ByteArray): Result<Unit> {
+    fun restoreArchive(context: Context, archive: File): Result<Unit> {
         val filesDir = context.filesDir
         return restoreArchive(filesDir, { prefsName, json ->
             restorePrefsJson(context.getSharedPreferences(prefsName, Context.MODE_PRIVATE), json)
-        }, bytes).onSuccess {
+        }, archive).onSuccess {
             Log.i(TAG, "Restore done -> ${filesDir.path}")
         }.onFailure { e ->
             Log.e(TAG, "restoreArchive failed", e)
         }
     }
+
+    /** 字节流入口（内存解压；本地导入等小包场景），内部复用文件流核心。 */
+    fun restoreArchive(context: Context, bytes: ByteArray): Result<Unit> {
+        val filesDir = context.filesDir
+        return restoreArchive(filesDir, { prefsName, json ->
+            restorePrefsJson(context.getSharedPreferences(prefsName, Context.MODE_PRIVATE), json)
+        }, bytes)
+    }
+
+    /**
+     * 恢复结果概要（收尾步骤据此判断要不要合并词库快照）。
+     *
+     * @param entryCount        落盘条目总数（0 → 视为空包失败）
+     * @param dictSnapshotCount 落盘的自造词快照文件数（`sync/<id>/` 下的 `*.userdb.txt`）
+     */
+    internal data class RestoreOutcome(val entryCount: Int, val dictSnapshotCount: Int)
 
     /**
      * 恢复核心（纯 JVM，便于单测）：META 条目按前缀路由，其余条目进 filesDir/rime。
@@ -90,14 +225,42 @@ object BackupManager {
     fun restoreArchive(
         filesDir: File,
         prefsRestorer: (prefsName: String, json: ByteArray) -> Unit,
+        archive: File
+    ): Result<Unit> = restoreArchiveOutcome(filesDir, prefsRestorer, archive.inputStream()).map { }
+
+    /** 字节入口：语义与文件入口一致（校验规则共用一份实现）。 */
+    fun restoreArchive(
+        filesDir: File,
+        prefsRestorer: (prefsName: String, json: ByteArray) -> Unit,
         bytes: ByteArray
-    ): Result<Unit> {
+    ): Result<Unit> = restoreArchiveOutcome(filesDir, prefsRestorer, bytes.inputStream()).map { }
+
+    private fun restoreArchiveOutcome(
+        filesDir: File,
+        prefsRestorer: (prefsName: String, json: ByteArray) -> Unit,
+        archive: File
+    ): Result<RestoreOutcome> = restoreArchiveOutcome(filesDir, prefsRestorer, archive.inputStream())
+
+    /** 字节入口（internal 供单测断言条目计数）：语义与文件入口一致。 */
+    internal fun restoreArchiveOutcome(
+        filesDir: File,
+        prefsRestorer: (prefsName: String, json: ByteArray) -> Unit,
+        bytes: ByteArray
+    ): Result<RestoreOutcome> = restoreArchiveOutcome(filesDir, prefsRestorer, bytes.inputStream())
+
+    private fun restoreArchiveOutcome(
+        filesDir: File,
+        prefsRestorer: (prefsName: String, json: ByteArray) -> Unit,
+        rawInput: java.io.InputStream
+    ): Result<RestoreOutcome> {
         try {
             val rimeDir = File(filesDir, "rime")
             if (!rimeDir.exists()) rimeDir.mkdirs()
             val pluginsDir = File(filesDir, "plugins")
+            val manifestsDir = SchemaManifestManager.getManifestsDir(filesDir)
             var entryCount = 0
-            ZipInputStream(bytes.inputStream()).use { zis ->
+            var dictSnapshotCount = 0
+            ZipInputStream(rawInput).use { zis ->
                 while (true) {
                     val entry = zis.nextEntry ?: break
                     if (entry.isDirectory) continue
@@ -109,11 +272,23 @@ object BackupManager {
                             rel == "settings.json" -> prefsRestorer(PREFS_NAME_SETTINGS, data)
                             rel.startsWith("plugin_configs/") && rel.endsWith(".json") -> {
                                 val pluginId = rel.removePrefix("plugin_configs/").removeSuffix(".json")
-                                if (pluginId.isNotBlank() && !pluginId.contains('/') && !pluginId.contains('\\')) {
+                                if (isSafeId(pluginId)) {
                                     prefsRestorer(PREFS_PREFIX_PLUGIN_CFG + pluginId, data)
                                 }
                             }
                             rel == "plugins.xml" -> writeChecked(File(filesDir, "plugins.xml"), filesDir, data)
+                            // v3 插件注册表（安装记录 + 启用状态）：与插件包同档（完整方案）
+                            rel == "plugins.json" -> writeChecked(File(filesDir, "plugins.json"), filesDir, data)
+                            // 方案清单（文件所有权/校验）：完整方案档随方案本体一起恢复
+                            rel == SCHEME_REGISTRY_ENTRY -> writeChecked(
+                                SchemaManifestManager.getRegistryFile(filesDir), filesDir, data
+                            )
+                            rel.startsWith(SCHEME_MANIFESTS_ENTRY) && rel.endsWith(".json") -> {
+                                val schemeId = rel.removePrefix(SCHEME_MANIFESTS_ENTRY).removeSuffix(".json")
+                                if (isSafeId(schemeId)) {
+                                    writeChecked(File(manifestsDir, "$schemeId.json"), manifestsDir, data)
+                                }
+                            }
                             rel.startsWith("plugins/") -> writeChecked(
                                 File(pluginsDir, rel.removePrefix("plugins/")), pluginsDir, data
                             )
@@ -137,16 +312,21 @@ object BackupManager {
                     }
                     target.parentFile?.mkdirs()
                     target.outputStream().use { zis.copyTo(it) }
+                    if (name.startsWith("sync/") && name.endsWith(".userdb.txt")) dictSnapshotCount++
                     entryCount++
                     zis.closeEntry()
                 }
             }
             if (entryCount == 0) return Result.failure(Exception("备份包为空"))
-            return Result.success(Unit)
+            return Result.success(RestoreOutcome(entryCount, dictSnapshotCount))
         } catch (e: Exception) {
             return Result.failure(e)
         }
     }
+
+    /** 元数据 id 安全性：非空且不含路径分隔符（防 marketplace/manifests 目录穿越）。 */
+    private fun isSafeId(id: String): Boolean =
+        id.isNotBlank() && !id.contains('/') && !id.contains('\\') && id != "." && id != ".."
 
     /** 目标必须落在 baseDir 内（防元数据条目穿越），否则抛异常中止恢复。 */
     private fun writeChecked(target: File, baseDir: File, data: ByteArray) {
@@ -202,8 +382,13 @@ object BackupManager {
         editor.apply()
     }
 
-    /** 收集备份包元数据条目（settings/插件配置/plugins.xml；包根前缀外为 rime 文件）。 */
-    internal fun collectMetaEntries(context: Context, mode: ExportMode): List<Pair<String, ByteArray>> {
+    /**
+     * 收集备份包元数据条目（设置项、插件配置、插件注册表、方案清单）。
+     *
+     * 包根前缀外的条目一律视为 rime 目录相对路径（见 [RimeExportManager.includeRimeEntry]）；
+     * 历史 `plugins.xml`（v2 Lua 注册表，v3 已不读）不再产出，但恢复侧仍兼容旧包。
+     */
+    internal fun collectMetaEntries(context: Context): List<Pair<String, ByteArray>> {
         val entries = mutableListOf<Pair<String, ByteArray>>()
         val settingsPrefs = context.getSharedPreferences(PREFS_NAME_SETTINGS, Context.MODE_PRIVATE)
         entries += (META_PREFIX + "settings.json") to prefsToJson(settingsPrefs).toByteArray(Charsets.UTF_8)
@@ -221,10 +406,22 @@ object BackupManager {
                 }
             }
 
-        val pluginsXml = File(context.filesDir, "plugins.xml")
-        if (pluginsXml.exists()) {
-            entries += (META_PREFIX + "plugins.xml") to pluginsXml.readBytes()
+        // 插件注册表（安装记录 + 启用状态）：与 META plugins/ 下的插件包同档才有意义
+        val pluginsRegistry = File(context.filesDir, PLUGINS_REGISTRY_ENTRY)
+        if (pluginsRegistry.exists()) {
+            entries += (META_PREFIX + PLUGINS_REGISTRY_ENTRY) to pluginsRegistry.readBytes()
         }
+
+        // 方案清单（文件所有权 + 校验）：与方案本体同档，供方案管理与卸载使用
+        val registry = SchemaManifestManager.getRegistryFile(context)
+        if (registry.exists()) {
+            entries += (META_PREFIX + SCHEME_REGISTRY_ENTRY) to registry.readBytes()
+        }
+        SchemaManifestManager.getManifestsDir(context).listFiles()
+            ?.filter { it.isFile && it.name.endsWith(".json") }
+            ?.forEach { manifest ->
+                entries += (META_PREFIX + SCHEME_MANIFESTS_ENTRY + manifest.name) to manifest.readBytes()
+            }
         return entries
     }
 }

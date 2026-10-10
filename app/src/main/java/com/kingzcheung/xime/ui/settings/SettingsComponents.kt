@@ -58,9 +58,10 @@ import com.kingzcheung.xime.ui.theme.keyboardBackground
 @Composable
 fun SettingsSection(
     title: String,
+    modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    Column {
+    Column(modifier = modifier) {
         Text(
             text = title,
             style = MaterialTheme.typography.labelLarge,

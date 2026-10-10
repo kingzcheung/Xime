@@ -93,7 +93,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kingzcheung.xime.BuildConfig
 import com.kingzcheung.xime.plugin.ActivePluginSelection
 import com.kingzcheung.xime.plugin.ExtensionManager
+import com.kingzcheung.xime.plugin.core.api.EmojiPlugin
 import com.kingzcheung.xime.plugin.core.api.PluginIcon
+import com.kingzcheung.xime.plugin.core.config.IPluginConfigurable
 import com.kingzcheung.xime.plugin.core.model.Activation
 import com.kingzcheung.xime.plugin.core.model.PluginCategory
 import com.kingzcheung.xime.plugin.core.model.PluginSource
@@ -368,11 +370,13 @@ private fun ExtensionItem(
         }
     }
     
-    val hasSettings = pluginInstance?.let {
-        (it as? com.kingzcheung.xime.plugin.core.config.IPluginConfigurable)
-            ?.getSettingsSchema()?.isNotEmpty() == true ||
-            (it as? com.kingzcheung.xime.plugin.core.api.EmojiPlugin)?.hasSettings() == true
-    } ?: false
+    // 设置项探测走 IO：旧实现在组合期同步调 getSettingsSchema()，每次重组都会进一次
+    // QuickJS（主线程被 JS 执行阻塞），且插件此刻若正被停用/重载（runtime.close()）会撞上
+    // "Already closed"，被记成"[脚本错误] 调用 settings.schema"（v3.1.0 真机 record）。
+    val configurable = pluginInstance as? IPluginConfigurable
+    val schemaState = rememberPluginSettingsSchema(configurable, extension.id)
+    val hasSettings = schemaState.schema.isNotEmpty() ||
+        (pluginInstance as? EmojiPlugin)?.hasSettings() == true
     
     if (showErrorDialog && hasErrors) {
         PluginErrorDialog(

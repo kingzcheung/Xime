@@ -14,7 +14,7 @@ import java.io.InputStream
  * 与「方案词库」（随方案分发的静态 `.dict.yaml`）是两类数据。librime 没有
  * "读词条"的 C 接口，只能经 JNI 用内部 DbSource 遍历并转成文本码表文本
  * （见 `rime_jni.cc::readUserDictText`）；导出 / 导入 / 增 / 删则**共用引擎自带的同一条通道**
- * （`UserDictManager::Export/Import` + `UserDbImporter`）—— 与 PC 端（小狼毫/鼠须管）
+ * （`UserDictManager::Export/Import` + `UserDbImporter`）—— 与电脑端 rime
  * 同一实现，生成的 `.txt` 码表可互通。单条增删就是把一行码表交给 Import，不必动 native。
  */
 object UserDictIoManager {
@@ -217,6 +217,14 @@ object UserDictIoManager {
     internal fun validateImportText(text: String): String? {
         if (text.isBlank()) return "文件是空的"
         if (text.contains('\u0000')) return "不是文本文件（含有空字节），请选择导出的 .txt 码表"
+        // 词库快照（`<词典名>.userdb.txt`）与码表列序不同：快照是「码 \t 词 \t c=.. d=.. t=..」，
+        // 用码表导入器读会把码与词写反。快照请走 同步与备份 → 导入快照（由引擎按时间戳合并）。
+        val firstLine = text.lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty()
+        if (firstLine.startsWith("# Rime user dictionary") &&
+            !firstLine.startsWith("# Rime user dictionary export")
+        ) {
+            return "这是词库快照（.userdb.txt），请到「同步与备份 → 导入快照」导入；此处只收 .txt 词条码表"
+        }
         val entries = text.lineSequence()
             .map { it.trim() }
             .filter { it.isNotEmpty() && !it.startsWith('#') }

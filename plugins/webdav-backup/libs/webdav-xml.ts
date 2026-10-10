@@ -14,7 +14,7 @@ const MONTHS: Record<string, number> = {
   Jul: 7, Aug: 8, Sep: 9, Oct: 10, Nov: 11, Dec: 12,
 };
 
-// Howard Hinnant days_from_civil（公历日期 → 自 1970-01-01 的天数）
+// Howard Hinnant days_from_civil（公历日期 → 自 1970-01-01 的**毫秒**数）
 export function epochFromParts(y: number, m: number, d: number,
   hh?: number, mm?: number, ss?: number): number {
   if (!y || !m || !d) return 0;
@@ -26,7 +26,10 @@ export function epochFromParts(y: number, m: number, d: number,
   const doy = Math.floor((153 * mp + 2) / 5) + d - 1;
   const doe = yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy;
   const days = era * 146097 + doe - 719468;
-  return days * 86400 + (hh || 0) * 3600 + (mm || 0) * 60 + (ss || 0);
+  const seconds = days * 86400 + (hh || 0) * 3600 + (mm || 0) * 60 + (ss || 0);
+  // 契约单位是毫秒（XimeBackupItem.createdAt / 宿主 RemoteBackupEntry.createdAt）：
+  // 早期这里返回秒，宿主按毫秒渲染 → 列表显示成 1970-01-21（真机反馈"创建日期 1970 年"）
+  return seconds * 1000;
 }
 
 // 优先 creationdate（ISO 8601），其次 getlastmodified（RFC 1123）

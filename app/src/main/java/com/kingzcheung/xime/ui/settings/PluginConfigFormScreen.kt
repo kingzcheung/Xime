@@ -81,11 +81,11 @@ fun PluginConfigFormScreen(
     val configStore = remember(pluginId) {
         PluginConfigStoreImpl(context.applicationContext as android.app.Application, pluginId)
     }
-    val fields = remember(schema, plugin) {
-        if (schema.isNotEmpty()) schema else {
-            runCatching { plugin.getSettingsSchema() }.getOrElse { emptyList() }
-        }
-    }
+    // 调用方已带 schema（插件设置页已在 IO 读完）时直接用；否则本组件自己在 IO 读：
+    // 组合期不进插件运行时（旧的 remember 同步调用会阻塞主线程，并与插件卸载/重载竞态）。
+    val needLoad = schema.isEmpty()
+    val fallbackState = rememberPluginSettingsSchema(if (needLoad) plugin else null, pluginId)
+    val fields = if (needLoad) fallbackState.schema else schema
     val groupedFields = remember(fields) { fields.groupBy { it.section.orEmpty() } }
 
     val dynamicOptions = remember(plugin) { mutableStateMapOf<String, List<String>>() }
@@ -463,10 +463,19 @@ private fun UiNodeEditor(
                     }
                     buttonBusy = true
                     scope.launch {
-                        val error = withContext(Dispatchers.IO) {
-                            runCatching { plugin.onAction(action.toString()) }.getOrNull()
+                        // 结果语义：null/空 = 成功（动作无错误消息）；非空 = 失败原因。
+                        // 抛异常也必须报错——曾经 runCatching{}.getOrNull() 把异常吞成 null，
+                        // 于是动作报错也会提示"成功"（issue #1061 假成功的一半来源）。
+                        val outcome = withContext(Dispatchers.IO) {
+                            runCatching { plugin.onAction(action) }
                         }
                         buttonBusy = false
+                        val failure = outcome.exceptionOrNull()
+                        val error = if (failure != null) {
+                            "执行失败：${failure.message ?: failure.javaClass.simpleName}"
+                        } else {
+                            outcome.getOrNull()
+                        }
                         if (error.isNullOrBlank()) {
                             Toast.makeText(context, "成功", Toast.LENGTH_SHORT).show()
                         } else {

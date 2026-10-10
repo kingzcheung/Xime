@@ -233,7 +233,10 @@ fun SettingsScreen(
             BackupSettingsContent(
                 onBack = { navController.popBackStack() },
                 onNavigateToPlugins = { navController.navigate(SettingsRoutes.Plugins) },
-                onNavigateToMarket = { navController.navigate(SettingsRoutes.MarketPlugins) }
+                onNavigateToMarket = { navController.navigate(SettingsRoutes.MarketPlugins) },
+                onNavigateToPluginSettings = { pluginId ->
+                    navController.navigate("${SettingsRoutes.PluginSettings}/$pluginId")
+                }
             )
         }
         composable(SettingsRoutes.About) {

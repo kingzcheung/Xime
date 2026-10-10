@@ -31,6 +31,13 @@ open class JsPluginAdapter(
 
     override suspend fun onAction(action: String): String? {
         if (action.isBlank()) return "未知操作"
+        // 动作 id 是插件导出对象上的方法名（`plugin.<action>`）。方法不存在时
+        // callAsync 同样返回 null（与"动作成功"同形），必须先判存在，否则设置页
+        // 按钮会出现"没发请求却提示成功"的假成功。
+        if (!runtime.hasMethod(action)) {
+            protocolWarn("未知设置动作 '$action'（插件未导出该方法）")
+            return "未知操作: $action"
+        }
         val result = runtime.callAsync(action)
         val v = JsScriptRuntime.jsToKotlin(result)
         val msg = when (v) {
@@ -119,9 +126,9 @@ open class JsPluginAdapter(
     }
 
     /**
-     * 通用配置就绪判定：所有 required 配置字段均已有值。
+     * 通用配置就绪判定：所有 required 配置字段均已有值（见 [IPluginConfigurable.isConfigured]）。
      */
-    open fun isConfigured(): Boolean {
+    override fun isConfigured(): Boolean {
         val schema = getSettingsSchema()
         if (schema.isEmpty()) return true
         return schema.none { it.required && it.key != null && pluginContext.configStore.get(it.key).isNullOrBlank() }

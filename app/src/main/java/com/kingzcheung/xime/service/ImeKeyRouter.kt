@@ -536,7 +536,7 @@ internal class ImeKeyRouter(private val service: XimeInputMethodService) {
 
                         // 非 ASCII 可打印字符（全角符号/中文标点）：直接上屏，不进入 Rime 引擎。
                         // Rime processKey 只接受标准键码，全角键码（如 U+FF0F）无法识别会被静默
-                        // 丢弃，导致中文模式下符号面板点击全角字符无输出（与 Trime onText 行为一致）。
+                        // 丢弃，导致中文模式下符号面板点击全角字符无输出（与 rime 生态既有行为一致）。
                         if (char.isNotEmpty() && char.any { it.code > 0x7E }) {
                             committedText = char
                             needsUIUpdate = true

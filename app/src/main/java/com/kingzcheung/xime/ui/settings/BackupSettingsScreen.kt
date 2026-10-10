@@ -2,31 +2,52 @@ package com.kingzcheung.xime.ui.settings
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.FileDownload
+import androidx.compose.material.icons.outlined.FileUpload
+import androidx.compose.material.icons.outlined.SaveAlt
+import androidx.compose.material.icons.outlined.SettingsBackupRestore
+import androidx.compose.material.icons.twotone.Backup
 import androidx.compose.material.icons.twotone.CloudUpload
+import androidx.compose.material.icons.twotone.Sync
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -42,43 +63,61 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.kingzcheung.xime.plugin.ActivePluginSelection
 import com.kingzcheung.xime.plugin.ExtensionManager
 import com.kingzcheung.xime.plugin.core.api.BackupPlugin
+import com.kingzcheung.xime.plugin.core.api.RemoteBackupEntry
+import com.kingzcheung.xime.plugin.core.config.IPluginConfigurable
 import com.kingzcheung.xime.plugin.core.model.PluginCategory
 import com.kingzcheung.xime.plugin.core.model.PluginInfo
+import com.kingzcheung.xime.plugin.core.runtime.PluginManager
 import com.kingzcheung.xime.settings.BackupManager
-import com.kingzcheung.xime.settings.ExportMode
+import com.kingzcheung.xime.settings.RimeExportManager
 import com.kingzcheung.xime.settings.SettingsPreferences
 import com.kingzcheung.xime.settings.SyncManager
-import com.kingzcheung.xime.plugin.core.runtime.PluginManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
 /**
  * 同步与备份设置页。
  *
- * 词库同步为主链路：基于引擎原生用户词典同步（sync 快照，时间戳合并），
- * 支持本地导入/导出与经备份插件的多端云端互通；配置备份为附带功能
- * （方案/设置/插件包，不含用户词典——词典统一走快照合并语义）。
+ * 只有两条链路（引擎原生 sync 文本快照为共同底座，按时间戳合并不互相覆盖）：
+ * - **词条同步**：自造词的增量备份——本机整理 + 云端多设备合并，一个主动作；
+ * - **完整备份**：整机的时间点归档（设置/补丁 + 方案与资源 + 插件包 + 自造词快照），
+ *   云端与本地出口同格；恢复是覆盖式，词条合并。
+ *
  * 备份目标为已安装的 backup 类型插件（单选激活，与剪贴板同步同模式），
- * 包由宿主生成/恢复，服务器配置由所选插件的配置表单承载。
+ * 包由宿主生成/恢复，服务器配置在所选插件的独立配置页。
+ *
+ * 交互设计（P0 重设计，见 docs/backup-ux-redesign.md）：
+ * - **状态一眼可懂**：服务行给"已配置 / 未启用 / 未配置"三种引导态；两张卡右上给
+ *   "进行中 / 失败 / 成功 / 从未"状态胶囊 + 相对时间（今天 12:30），不再只有颜色点；
+ * - **失败留痕**：失败原因落盘（[SettingsPreferences.setLastSyncError]/[setLastBackupError]），
+ *   回到本页仍是"上次失败：原因 + 重试"，snackbar 只做即时反馈；
+ * - **一屏两个主任务**：`立即同步` / `立即备份`，低频与危险入口（导入导出词条、
+ *   保存到本机、从文件恢复）集中到页尾「更多」段，不再是两个弹层；
+ * - **只禁用相关操作**：拉云端列表是只读轻操作，不再整页禁用（`blocking`）；
+ * - 删除云端备份先确认（不可恢复），恢复确认里明示覆盖语义。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BackupSettingsContent(
     onBack: () -> Unit,
     onNavigateToPlugins: () -> Unit,
-    onNavigateToMarket: () -> Unit
+    onNavigateToMarket: () -> Unit,
+    /** 打开所选备份服务的配置页（独立页面，与插件中心同一入口） */
+    onNavigateToPluginSettings: (String) -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val snackbar = remember { SnackbarHostState() }
     val installedPlugins = remember { ExtensionManager.getAllInstalledPlugins() }
     val backupPlugins = remember { installedPlugins.filter { it.category == PluginCategory.BACKUP } }
     val syncPlugins = remember { ExtensionManager.getEnabledBackupPlugins(context) }
@@ -96,51 +135,189 @@ fun BackupSettingsContent(
             syncPlugins.firstOrNull { it.first == selectedPluginId } ?: syncPlugins.firstOrNull()
         )
     }
-    var backupMode by remember { mutableStateOf(ExportMode.CONFIG_ONLY) }
-    // 当前进行中的操作标识（"backup"/"list"/"restore:<id>"/"delete:<id>"）：
-    // 按操作独立，loading 只出现在触发它的按钮上，其余按钮仅禁用
+    // 当前进行中的操作标识（"syncAll"/"backup"/"list"/"restore:<id>"/"delete:<id>"/…）：
+    // 按操作独立；loading 除本操作按钮内圈外，还在所属卡片给一条细进度线
     var busyOp by remember { mutableStateOf<String?>(null) }
-    val busy = busyOp != null
-    var message by remember { mutableStateOf<String?>(null) }
-    var remoteList by remember { mutableStateOf<List<com.kingzcheung.xime.plugin.core.api.RemoteBackupEntry>?>(null) }
-    // 切换备份服务走单选弹窗（与剪贴板同步/语音转文本同构：插件多时页面长度恒定）
     var showServicePicker by remember { mutableStateOf(false) }
+    var remoteListExpanded by remember { mutableStateOf(false) }
+    var snapshotListExpanded by remember { mutableStateOf(false) }
+    // 恢复与删除都先确认：恢复=覆盖式落盘，删除=远端不可恢复
+    var pendingRestoreEntry by remember { mutableStateOf<RemoteBackupEntry?>(null) }
+    var pendingDeleteEntry by remember { mutableStateOf<RemoteBackupEntry?>(null) }
+    var pendingLocalImportUri by remember { mutableStateOf<android.net.Uri?>(null) }
 
-    // 词库同步（词典快照为主链路，配置备份为附带；语义分工见各区块说明）
-    var lastSyncAt by remember {
-        mutableStateOf(SettingsPreferences.getLastRimeSyncAt(context))
-    }
-    var syncRemoteList by remember {
-        mutableStateOf<List<com.kingzcheung.xime.plugin.core.api.RemoteBackupEntry>?>(null)
-    }
+    // 词条同步：上次时间 + 云端各设备快照（只读；合并由主动作完成）
+    var lastSyncAt by remember { mutableStateOf(SettingsPreferences.getLastRimeSyncAt(context)) }
+    var lastBackupAt by remember { mutableStateOf(SettingsPreferences.getLastBackupAt(context)) }
+    var syncRemoteList by remember { mutableStateOf<List<RemoteBackupEntry>?>(null) }
+    // 云端完整备份列表（null=未拉取；词条快照条目在拉取点过滤，这里只管备份包）
+    var remoteList by remember { mutableStateOf<List<RemoteBackupEntry>?>(null) }
+    // 失败状态（F1）：持久化，回到本页仍能看到"上次失败 + 重试"，不再只靠 snackbar 一闪而过
+    var syncError by remember { mutableStateOf(SettingsPreferences.getLastSyncError(context)) }
+    var backupError by remember { mutableStateOf(SettingsPreferences.getLastBackupError(context)) }
+
+    // 进页面静默拉一次远端（IO）：主按钮要显示"云端 N 份 / N 台设备"，也省掉"点开才拉取"
     LaunchedEffect(activePlugin) {
         val plugin = activePlugin?.second ?: return@LaunchedEffect
         withContext(Dispatchers.IO) {
             syncRemoteList = SyncManager.listRemoteSnapshots(plugin)
+            remoteList = BackupManager.listRemote(plugin)?.filter { !SyncManager.isRemoteSyncEntry(it.name) }
         }
     }
+
+    // 配置就绪（IO 读取；组合期不调插件运行时）：null=读取中
+    val configured = rememberPluginConfigured(activePlugin?.second, activePlugin?.first ?: "")
+    // 进行中的操作是否阻塞其他主动作：拉列表是只读轻操作，不阻塞（旧实现整页禁用）
+    val blocking = busyOp != null && busyOp != "list"
+    val serviceReady = activePlugin != null && configured != false
 
     val importLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
         if (uris.isEmpty()) return@rememberLauncherForActivityResult
         busyOp = "import"
-        message = null
         scope.launch(Dispatchers.IO) {
             val result = SyncManager.importSnapshots(context, uris.toList())
             withContext(Dispatchers.Main) {
                 busyOp = null
                 lastSyncAt = SettingsPreferences.getLastRimeSyncAt(context)
-                message = result.fold(
-                    onSuccess = { "已导入 $it 个快照并完成合并" },
-                    onFailure = { "导入失败：${it.message}" }
+                snackbar.showSnackbar(
+                    result.fold(
+                        onSuccess = { r ->
+                            buildString {
+                                if (r.snapshotFiles > 0) {
+                                    append("已导入 ${r.snapshotFiles} 个快照")
+                                    if (r.merged) append("并完成合并")
+                                }
+                                if (r.importedEntries > 0) {
+                                    if (isNotEmpty()) append("；")
+                                    append("已导入 ${r.importedEntries} 条词条")
+                                }
+                            }
+                        },
+                        onFailure = { "导入失败：${it.message}" }
+                    )
                 )
+            }
+        }
+    }
+
+    val localPackageLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        pendingLocalImportUri = uri
+    }
+
+    //词条区主动作：本机整理（引擎原生 sync）+ 已配置服务时顺带云端多设备合并
+    fun runWordSync() {
+        val plugin = activePlugin?.second
+        busyOp = "syncAll"
+        scope.launch(Dispatchers.IO) {
+            val result: Result<Int> = if (plugin != null) {
+                SyncManager.remoteSync(context, plugin)
+            } else {
+                SyncManager.syncNow(context).map { 0 }
+            }
+            val fresh = plugin?.let { SyncManager.listRemoteSnapshots(it) }
+            withContext(Dispatchers.Main) {
+                busyOp = null
+                if (fresh != null) syncRemoteList = fresh
+                lastSyncAt = SettingsPreferences.getLastRimeSyncAt(context)
+                // 成功清空、失败落盘：页面状态与 snackbar 同一口径
+                val error = result.exceptionOrNull()?.message ?: "未知错误"
+                SettingsPreferences.setLastSyncError(context, if (result.isSuccess) null else error)
+                syncError = if (result.isSuccess) null else error
+                snackbar.showSnackbar(
+                    result.fold(
+                        onSuccess = { pulled ->
+                            when {
+                                plugin == null -> "已整理本机词条（未配置备份服务，未上云）"
+                                pulled > 0 -> "已合并 $pulled 台设备的词条，并上传本机快照"
+                                else -> "已上传本机快照（云端暂无其他设备）"
+                            }
+                        },
+                        onFailure = { "同步失败：$error" }
+                    )
+                )
+            }
+        }
+    }
+
+    //备份区主动作：刷新词条快照 → 打整机完整包 → 经备份插件上云（流式，不占内存）
+    fun runCloudBackup() {
+        val plugin = activePlugin?.second ?: return
+        busyOp = "backup"
+        scope.launch(Dispatchers.IO) {
+            val result = BackupManager.backupNow(context, plugin)
+            withContext(Dispatchers.Main) {
+                busyOp = null
+                if (result.ok) {
+                    lastBackupAt = SettingsPreferences.getLastBackupAt(context)
+                    SettingsPreferences.setLastBackupError(context, null)
+                    backupError = null
+                } else {
+                    val error = result.message ?: "未知错误"
+                    SettingsPreferences.setLastBackupError(context, error)
+                    backupError = error
+                }
+                snackbar.showSnackbar(
+                    if (result.ok) "备份完成" + (result.message ?: "")
+                    else "备份失败：${result.message ?: "未知错误"}"
+                )
+            }
+        }
+    }
+
+    //云端恢复：覆盖同名文件，词条快照由引擎就绪后按时间戳合并
+    fun runRestore(entry: RemoteBackupEntry) {
+        val plugin = activePlugin?.second ?: return
+        busyOp = "restore:${entry.id}"
+        scope.launch(Dispatchers.IO) {
+            val result = BackupManager.restore(context, plugin, entry.id)
+            withContext(Dispatchers.Main) {
+                busyOp = null
+                lastSyncAt = SettingsPreferences.getLastRimeSyncAt(context)
+                snackbar.showSnackbar(
+                    if (result.isSuccess) "恢复完成，重启应用后生效；自造词快照将在引擎就绪后按时间戳合并"
+                    else "恢复失败：${result.exceptionOrNull()?.message}"
+                )
+            }
+        }
+    }
+
+    fun runDeleteRemote(entry: RemoteBackupEntry) {
+        val plugin = activePlugin?.second ?: return
+        busyOp = "delete:${entry.id}"
+        scope.launch(Dispatchers.IO) {
+            val ok = BackupManager.deleteRemote(plugin, entry.id)
+            val fresh = if (ok) BackupManager.listRemote(plugin)?.filter { !SyncManager.isRemoteSyncEntry(it.name) } else null
+            withContext(Dispatchers.Main) {
+                busyOp = null
+                if (ok) remoteList = fresh
+                snackbar.showSnackbar(if (ok) "已删除该备份" else "删除失败")
+            }
+        }
+    }
+
+    // —— 刷新云端备份列表（过滤掉词条快照条目，它们属于词条区）——
+    fun refreshRemoteList() {
+        val plugin = activePlugin?.second ?: return
+        busyOp = "list"
+        scope.launch(Dispatchers.IO) {
+            val list = BackupManager.listRemote(plugin)?.filter { !SyncManager.isRemoteSyncEntry(it.name) }
+            val err = if (list == null) "获取备份列表失败" else null
+            withContext(Dispatchers.Main) {
+                busyOp = null
+                remoteList = list
+                err?.let { snackbar.showSnackbar(it) }
             }
         }
     }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.surface,
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 title = { Text("同步与备份") },
@@ -167,18 +344,26 @@ fun BackupSettingsContent(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            // ---------- 备份服务（词条同步与云端备份共用的通道） ----------
             SettingsSection(
                 title = "备份服务",
                 content = {
-                    if (backupPlugins.isEmpty()) {
-                        Column(
+                    when {
+                        backupPlugins.isEmpty() -> Column(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
+                            Icon(
+                                Icons.TwoTone.Backup,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(32.dp)
+                            )
                             Text(
-                                text = "未安装备份插件，请先在扩展商店安装后再配置。",
+                                text = "未安装备份插件，云端通道不可用；本机整理与本地导入导出不受影响。",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -189,459 +374,184 @@ fun BackupSettingsContent(
                                 Text("前往扩展商店")
                             }
                         }
-                    } else {
-                        // 入口始终可见（与剪贴板同步/语音转文本一致）：只装 1 个插件时也能点开确认候选与协议
-                        // 行自带 16dp 内边距，这里不再套一层 padding 的 Column，避免双重留白
-                        CurrentBackupServiceItem(
+
+                        // 未启用 / 未配置：给"去哪、做什么"的引导，而不是把主按钮灰着不说话
+                        activePlugin == null -> ServiceGuideRow(
+                            title = "备份插件已安装但未启用",
+                            subtitle = "启用后才能云端同步与备份",
+                            actionText = "去插件中心",
+                            onClick = onNavigateToPlugins
+                        )
+
+                        configured == false -> ServiceGuideRow(
+                            title = "还没填服务器和账号",
+                            subtitle = "填完才能云端同步与备份",
+                            actionText = "去配置",
+                            onClick = { activePlugin?.first?.let(onNavigateToPluginSettings) }
+                        )
+
+                        else -> CurrentBackupServiceItem(
                             pluginInfo = installedPlugins.find { it.id == activePlugin?.first },
                             pluginId = activePlugin?.first,
                             plugin = activePlugin?.second,
-                            onClick = { showServicePicker = true }
+                            configured = configured,
+                            lastSuccessAt = maxOf(lastSyncAt, lastBackupAt),
+                            onClick = { showServicePicker = true },
+                            onConfigure = activePlugin?.first?.let { id ->
+                                { onNavigateToPluginSettings(id) }
+                            }
                         )
                     }
                 }
             )
 
+            // ---------- 卡片一：用户词库同步（一个主动作） ----------
             SettingsSection(
-                title = "词库同步",
+                title = "用户词库",
+                modifier = Modifier.animateContentSize(),
                 content = {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Text(
-                            text = buildString {
-                                append("设备标识：")
-                                append(SettingsPreferences.getRimeInstallationId(context).take(8))
-                                append("　上次同步：")
-                                append(
-                                    if (lastSyncAt > 0) {
-                                        SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
-                                            .format(Date(lastSyncAt))
-                                    } else "从未"
-                                )
-                            },
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Button(
-                            onClick = {
-                                busyOp = "sync"
-                                message = null
+                    FeatureCardHeader(
+                        title = "用户词库同步",
+                        // 一句话自适应：没成功过讲"做什么"，成功过讲"上次成功 + 云端规模"
+                        infoText = if (lastSyncAt > 0) buildString {
+                            append("上次成功 " + formatRelativeTime(lastSyncAt))
+                            syncRemoteList?.let { append(" · 云端 ${it.size} 台设备") }
+                        } else {
+                            "多台设备自动合并，新词不会被覆盖"
+                        },
+                        badgeText = if (busyOp == "syncAll") "进行中"
+                        else if (syncError != null) "失败"
+                        else if (lastSyncAt > 0) "成功" else "从未",
+                        badgeTone = if (busyOp == "syncAll") StatusTone.Busy
+                        else if (syncError != null) StatusTone.Fail
+                        else if (lastSyncAt > 0) StatusTone.Ok else StatusTone.Never,
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.surfaceContainerHighest)
+                    WordCardActions(
+                        busyOp = busyOp,
+                        blocking = blocking,
+                        error = syncError,
+                        onSync = ::runWordSync,
+                        snapshotList = syncRemoteList,
+                        expanded = snapshotListExpanded,
+                        onToggleExpanded = { snapshotListExpanded = !snapshotListExpanded }
+                    )
+                }
+            )
+
+            // ---------- 卡片二：完整备份（一个主动作） ----------
+            SettingsSection(
+                title = "完整备份",
+                modifier = Modifier.animateContentSize(),
+                content = {
+                    FeatureCardHeader(
+                        title = "备份与恢复",
+                        infoText = if (lastBackupAt > 0) buildString {
+                            append("上次成功 " + formatRelativeTime(lastBackupAt))
+                            remoteList?.let { append(" · 云端 ${it.size} 份") }
+                        } else {
+                            "设置、输入方案、插件，一次打包"
+                        },
+                        badgeText = if (busyOp == "backup") "进行中"
+                        else if (backupError != null) "失败"
+                        else if (lastBackupAt > 0) "成功" else "从未",
+                        badgeTone = if (busyOp == "backup") StatusTone.Busy
+                        else if (backupError != null) StatusTone.Fail
+                        else if (lastBackupAt > 0) StatusTone.Ok else StatusTone.Never,
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.surfaceContainerHighest)
+                    BackupCardActions(
+                        busyOp = busyOp,
+                        blocking = blocking,
+                        serviceReady = serviceReady,
+                        error = backupError,
+                        onBackup = ::runCloudBackup,
+                        onConfigure = { activePlugin?.first?.let(onNavigateToPluginSettings) },
+                        onRefresh = ::refreshRemoteList,
+                        remoteList = remoteList,
+                        expanded = remoteListExpanded,
+                        onToggleExpanded = {
+                            remoteListExpanded = !remoteListExpanded
+                            if (remoteListExpanded) refreshRemoteList()
+                        },
+                        onRestore = { pendingRestoreEntry = it },
+                        onDelete = { pendingDeleteEntry = it }
+                    )
+                }
+            )
+
+            // ---------- 更多：低频与危险入口集中（原两个弹层） ----------
+            SettingsSection(
+                title = "更多",
+                content = {
+                    SettingsItem(
+                        icon = Icons.Outlined.FileDownload,
+                        title = "导入词条（快照 / 码表）",
+                        subtitle = "其他 rime 前端的快照或码表；一律按时间戳合并",
+                        badgeText = if (busyOp == "import") "进行中" else null,
+                        showArrow = true,
+                        onClick = { if (busyOp == null) importLauncher.launch(arrayOf("*/*")) }
+                    )
+                    SettingsItem(
+                        icon = Icons.Outlined.FileUpload,
+                        title = "导出词条到下载目录",
+                        subtitle = "给其他 rime 前端用；解压后对方可直接还原",
+                        badgeText = if (busyOp == "export") "进行中" else null,
+                        showArrow = true,
+                        onClick = {
+                            if (busyOp == null) {
+                                busyOp = "export"
                                 scope.launch(Dispatchers.IO) {
-                                    val result = SyncManager.syncNow(context)
+                                    val result = SyncManager.exportToDownloads(context)
                                     withContext(Dispatchers.Main) {
                                         busyOp = null
-                                        lastSyncAt = SettingsPreferences.getLastRimeSyncAt(context)
-                                        message = result.fold(
-                                            onSuccess = { "同步完成" },
-                                            onFailure = { "同步失败：${it.message}" }
-                                        )
-                                    }
-                                }
-                            },
-                            enabled = !busy,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            if (busyOp == "sync") {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(14.dp),
-                                    strokeWidth = 2.dp
-                                )
-                            } else {
-                                Text("立即同步")
-                            }
-                        }
-                        Text(
-                            text = "合并本机 sync 目录中已有的快照（含此前导入的），并导出本机最新快照。",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            OutlinedButton(
-                                onClick = {
-                                    busyOp = "import"
-                                    importLauncher.launch(arrayOf("*/*"))
-                                },
-                                enabled = !busy
-                            ) {
-                                if (busyOp == "import") {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(14.dp),
-                                        strokeWidth = 2.dp
-                                    )
-                                } else {
-                                    Text("导入快照")
-                                }
-                            }
-                            OutlinedButton(
-                                onClick = {
-                                    busyOp = "export"
-                                    message = null
-                                    scope.launch(Dispatchers.IO) {
-                                        val result = SyncManager.exportToDownloads(context)
-                                        withContext(Dispatchers.Main) {
-                                            busyOp = null
-                                            message = result.fold(
+                                        snackbar.showSnackbar(
+                                            result.fold(
                                                 onSuccess = { "已保存到下载目录：$it" },
                                                 onFailure = { "导出失败：${it.message}" }
                                             )
-                                        }
-                                    }
-                                },
-                                enabled = !busy
-                            ) {
-                                if (busyOp == "export") {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(14.dp),
-                                        strokeWidth = 2.dp
-                                    )
-                                } else {
-                                    Text("导出到下载")
-                                }
-                            }
-                        }
-                        Text(
-                            text = "词典快照基于引擎原生同步：多设备词条按时间戳合并不互相覆盖。导入支持快照包 zip 与 .userdb.txt 文本快照（从其他设备/桌面端的 sync 目录拷出即可迁移）；导出的 zip 也可放进电脑端引擎目录的 sync 文件夹直接合并。",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline
-                        )
-                    }
-                }
-            )
-
-            activePlugin?.let { selected ->
-                val plugin = selected.second
-
-                SettingsSection(
-                    title = "云端快照",
-                    content = {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Button(
-                                onClick = {
-                                    busyOp = "remote"
-                                    message = null
-                                    scope.launch(Dispatchers.IO) {
-                                        val result = SyncManager.remoteSync(context, plugin)
-                                        withContext(Dispatchers.Main) {
-                                            busyOp = null
-                                            lastSyncAt = SettingsPreferences.getLastRimeSyncAt(context)
-                                            message = result.fold(
-                                                onSuccess = { pulled ->
-                                                    scope.launch(Dispatchers.IO) {
-                                                        val fresh = SyncManager.listRemoteSnapshots(plugin)
-                                                        withContext(Dispatchers.Main) {
-                                                            syncRemoteList = fresh
-                                                        }
-                                                    }
-                                                    if (pulled > 0) "已合并 $pulled 台设备的快照并上传本机快照"
-                                                    else "已上传本机快照（远端暂无其他设备）"
-                                                },
-                                                onFailure = { "云端同步失败：${it.message}" }
-                                            )
-                                        }
-                                    }
-                                },
-                                enabled = !busy,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                if (busyOp == "remote") {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(14.dp),
-                                        strokeWidth = 2.dp
-                                    )
-                                } else {
-                                    Text("同步到云端")
-                                }
-                            }
-                            val syncList = syncRemoteList
-                            if (syncList == null) {
-                                Text(
-                                    text = "正在获取远端快照列表…",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            } else if (syncList.isEmpty()) {
-                                Text(
-                                    text = "云端暂无快照。执行\"同步到云端\"后，其他设备将能看到本机快照并自动合并新词条。",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            } else {
-                                syncList.forEach { entry ->
-                                    Column {
-                                        Text(
-                                            text = entry.name,
-                                            style = MaterialTheme.typography.bodyMedium
-                                        )
-                                        Text(
-                                            text = buildString {
-                                                if (entry.createdAt > 0) {
-                                                    append(
-                                                        SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
-                                                            .format(Date(entry.createdAt))
-                                                    )
-                                                }
-                                                if (entry.size >= 0) {
-                                                    if (isNotEmpty()) append(" · ")
-                                                    append(String.format(Locale.getDefault(), "%.1f KB", entry.size / 1024.0))
-                                                }
-                                            },
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.outline
                                         )
                                     }
                                 }
-                            }
-                        }
-                    }
-                )
-
-                SettingsSection(
-                    title = "备份设置",
-                    content = {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 8.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            ExportMode.entries.forEach { mode ->
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    RadioButton(
-                                        selected = backupMode == mode,
-                                        onClick = { backupMode = mode }
-                                    )
-                                    Text(
-                                        text = mode.label,
-                                        style = MaterialTheme.typography.bodyMedium
-                                    )
-                                }
-                            }
-                            if (backupMode == ExportMode.CONFIG_ONLY) {
-                                Text(
-                                    text = "仅配置：额外排除模型（.bin/.gram）；完整备份另含插件包。两种模式均不含用户词典——词典请使用上方\"词库同步\"快照，恢复配置包不会回滚词条。",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.outline
-                                )
-                            }
-                        }
-                    }
-                )
-
-                SettingsSection(
-                    title = "备份操作",
-                    content = {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                Button(
-                                    onClick = {
-                                        busyOp = "backup"
-                                        message = null
-                                        scope.launch(Dispatchers.IO) {
-                                            val result = BackupManager.backupNow(context, plugin, backupMode)
-                                            withContext(Dispatchers.Main) {
-                                                busyOp = null
-                                                message = if (result.ok) "备份完成"
-                                                else "备份失败：${result.message ?: "未知错误"}"
-                                            }
-                                        }
-                                    },
-                                    modifier = Modifier.weight(1f),
-                                    enabled = !busy
-                                ) {
-                                    if (busyOp == "backup") {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(18.dp),
-                                            strokeWidth = 2.dp
-                                        )
-                                    } else {
-                                        Icon(Icons.TwoTone.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
-                                    }
-                                    Text(
-                                        text = "立即备份",
-                                        fontSize = 12.sp,
-                                        modifier = Modifier.padding(start = 6.dp)
-                                    )
-                                }
-                                OutlinedButton(
-                                    onClick = {
-                                        busyOp = "list"
-                                        message = null
-                                        scope.launch(Dispatchers.IO) {
-                                            // 词库同步快照（rime-sync- 前缀）属于词库同步页，
-                                            // 不参与全量恢复语义，此处过滤不展示
-                                            val list = BackupManager.listRemote(plugin)
-                                                ?.filter { !SyncManager.isRemoteSyncEntry(it.name) }
-                                            val err = if (list == null) "获取备份列表失败" else null
-                                            withContext(Dispatchers.Main) {
-                                                busyOp = null
-                                                remoteList = list
-                                                message = err
-                                            }
-                                        }
-                                    },
-                                    modifier = Modifier.weight(1f),
-                                    enabled = !busy
-                                ) {
-                                    Text("查看远端备份", fontSize = 12.sp)
-                                }
-                            }
-                            message?.let {
-                                Text(
-                                    text = it,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-                )
-
-                remoteList?.let { list ->
-                    SettingsSection(
-                        title = "远端备份",
-                        content = {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(16.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                if (list.isEmpty()) {
-                                    Text(
-                                        text = "远端暂无备份",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                list.forEach { entry ->
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(
-                                                text = entry.name,
-                                                style = MaterialTheme.typography.bodyMedium
-                                            )
-                                            Text(
-                                                text = buildString {
-                                                    if (entry.createdAt > 0) {
-                                                        append(
-                                                            SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
-                                                                .format(Date(entry.createdAt))
-                                                        )
-                                                    }
-                                                    if (entry.size >= 0) {
-                                                        if (isNotEmpty()) append(" · ")
-                                                        append(String.format(Locale.getDefault(), "%.1f MB", entry.size / 1024.0 / 1024.0))
-                                                    }
-                                                },
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.outline
-                                            )
-                                        }
-                                        Row {
-                                            TextButton(
-                                                onClick = {
-                                                    busyOp = "restore:" + entry.id
-                                                    message = null
-                                                    scope.launch(Dispatchers.IO) {
-                                                        val result = BackupManager.restore(context, plugin, entry.id)
-                                                        withContext(Dispatchers.Main) {
-                                                            busyOp = null
-                                                            message = if (result.isSuccess)
-                                                                "恢复完成，重启应用后生效；如需找回备份后新增的词条，请在\"词库同步\"中重新执行同步"
-                                                            else "恢复失败：${result.exceptionOrNull()?.message}"
-                                                        }
-                                                    }
-                                                },
-                                                enabled = !busy
-                                            ) {
-                                                if (busyOp == "restore:" + entry.id) {
-                                                    CircularProgressIndicator(
-                                                        modifier = Modifier.size(14.dp),
-                                                        strokeWidth = 2.dp
-                                                    )
-                                                } else {
-                                                    Text("恢复")
-                                                }
-                                            }
-                                            TextButton(
-                                                onClick = {
-                                                    busyOp = "delete:" + entry.id
-                                                    message = null
-                                                    scope.launch(Dispatchers.IO) {
-                                                        val ok = BackupManager.deleteRemote(plugin, entry.id)
-                                                        val fresh = if (ok) BackupManager.listRemote(plugin)
-                                                            ?.filter { !SyncManager.isRemoteSyncEntry(it.name) } else null
-                                                        withContext(Dispatchers.Main) {
-                                                            busyOp = null
-                                                            if (ok) {
-                                                                remoteList = fresh
-                                                                message = "已删除"
-                                                            } else {
-                                                                message = "删除失败"
-                                                            }
-                                                        }
-                                                    }
-                                                },
-                                                enabled = !busy
-                                            ) {
-                                                if (busyOp == "delete:" + entry.id) {
-                                                    CircularProgressIndicator(
-                                                        modifier = Modifier.size(14.dp),
-                                                        strokeWidth = 2.dp
-                                                    )
-                                                } else {
-                                                    Text(
-                                                        "删除",
-                                                        color = MaterialTheme.colorScheme.error
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                Text(
-                                    text = "恢复覆盖 rime/ 目录同名文件（含自造词），并还原插件、插件配置与设置项；重启应用后全部生效。",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.outline
-                                )
                             }
                         }
                     )
+                    SettingsItem(
+                        icon = Icons.Outlined.SaveAlt,
+                        title = "保存完整备份到下载目录",
+                        subtitle = "换机 / 离线可用；与云端同一个包格式",
+                        badgeText = if (busyOp == "exportLocal") "进行中" else null,
+                        showArrow = true,
+                        onClick = {
+                            if (busyOp == null) {
+                                busyOp = "exportLocal"
+                                scope.launch(Dispatchers.IO) {
+                                    val result = RimeExportManager.exportArchive(context)
+                                    withContext(Dispatchers.Main) {
+                                        busyOp = null
+                                        if (result.isSuccess) {
+                                            lastBackupAt = SettingsPreferences.getLastBackupAt(context)
+                                        }
+                                        snackbar.showSnackbar(
+                                            result.fold(
+                                                onSuccess = { "已导出完整备份到下载目录：${it.fileName}" },
+                                                onFailure = { "导出失败：${it.message}" }
+                                            )
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    )
+                    SettingsItem(
+                        icon = Icons.Outlined.SettingsBackupRestore,
+                        title = "从文件恢复完整备份",
+                        subtitle = "覆盖式恢复；会先弹确认",
+                        showArrow = true,
+                        onClick = { if (busyOp == null) localPackageLauncher.launch(arrayOf("*/*")) }
+                    )
                 }
-
-                // 服务器地址等配置由插件表单承载（host.config）
-                PluginConfigFormScreen(
-                    pluginId = selected.first,
-                    plugin = plugin,
-                    pluginName = installedPlugins.find { it.id == selected.first }?.name ?: selected.first,
-                    onBack = {},
-                    embedded = true
-                )
-            }
+            )
         }
     }
 
@@ -670,6 +580,11 @@ fun BackupSettingsContent(
                     selectedPluginId = pickedId
                     SettingsPreferences.setBackupPluginId(context, pickedId)
                     remoteList = null
+                    // 换了服务：上一家的失败不再代表当前服务，清掉留痕
+                    SettingsPreferences.setLastSyncError(context, null)
+                    SettingsPreferences.setLastBackupError(context, null)
+                    syncError = null
+                    backupError = null
                     scope.launch(Dispatchers.IO) {
                         // 单选激活：同一时间只启用 1 个备份插件
                         backupPlugins
@@ -680,7 +595,7 @@ fun BackupSettingsContent(
                             }
                         SettingsPreferences.setPluginEnabled(context, pickedId, true)
                         PluginManager.launchPlugin(pickedId)
-                        // 重新获取已启用实例，驱动配置表单与远端备份列表切换到新插件
+                        // 重新获取已启用实例，驱动配置页入口与远端列表切换到新插件
                         activePlugin = ExtensionManager.getEnabledBackupPlugins(context)
                             .firstOrNull { it.first == pickedId }
                     }
@@ -689,13 +604,539 @@ fun BackupSettingsContent(
             onDismiss = { showServicePicker = false }
         )
     }
+
+    // 删除云端备份：不可恢复，先确认
+    pendingDeleteEntry?.let { entry ->
+        AlertDialog(
+            onDismissRequest = { pendingDeleteEntry = null },
+            title = { Text("删除云端备份") },
+            text = { Text("将永久删除「${entry.name}」，删除后无法找回。确定删除？") },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingDeleteEntry = null
+                    runDeleteRemote(entry)
+                }) {
+                    Text("删除", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteEntry = null }) { Text("取消") }
+            }
+        )
+    }
+
+    // 云端恢复：覆盖式（自造词合并），先确认
+    pendingRestoreEntry?.let { entry ->
+        AlertDialog(
+            onDismissRequest = { pendingRestoreEntry = null },
+            title = { Text("恢复到本机") },
+            text = {
+                Text(
+                    "把「${entry.name}」覆盖到本机：恢复同名配置/方案/插件与设置项；" +
+                        "自造词按时间戳合并，本机新词不会丢。重启应用后生效。"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingRestoreEntry = null
+                    runRestore(entry)
+                }) { Text("恢复") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingRestoreEntry = null }) { Text("取消") }
+            }
+        )
+    }
+
+    // 本地完整方案包导入：覆盖式恢复，先确认再解包
+    pendingLocalImportUri?.let { uri ->
+        AlertDialog(
+            onDismissRequest = { pendingLocalImportUri = null },
+            title = { Text("从本地恢复完整备份") },
+            text = {
+                Text(
+                    "会覆盖 rime/ 目录下同名配置与方案文件，并还原插件、插件配置与设置项；" +
+                        "自造词按时间戳合并（不会吃掉本机新词）。重启应用后全部生效。"
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingLocalImportUri = null
+                        busyOp = "importLocal"
+                        scope.launch(Dispatchers.IO) {
+                            val result = BackupManager.importLocal(context, uri)
+                            withContext(Dispatchers.Main) {
+                                busyOp = null
+                                lastSyncAt = SettingsPreferences.getLastRimeSyncAt(context)
+                                snackbar.showSnackbar(
+                                    result.fold(
+                                        onSuccess = { "已从本地恢复，重启应用后生效" },
+                                        onFailure = { "导入失败：${it.message}" }
+                                    )
+                                )
+                            }
+                        }
+                    }
+                ) { Text("导入") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingLocalImportUri = null }) { Text("取消") }
+            }
+        )
+    }
+}
+
+/** 云端条目行用的绝对时间（列表里要能对得上文件）；卡片状态用相对时间见 [formatRelativeTime]。 */
+private fun formatBackupTime(at: Long): String =
+    if (at > 0) SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(at)) else "从未"
+
+/**
+ * 相对时间：今天/昨天给到分钟，本年给月日，跨年给年月日。
+ * "上次成功 今天 12:30"比"2026-10-10 12:30"更像人话；[now] 可注入以便测试。
+ */
+internal fun formatRelativeTime(at: Long, now: Long = System.currentTimeMillis()): String {
+    if (at <= 0) return "从未"
+    val cal = Calendar.getInstance().apply { timeInMillis = at }
+    val nowCal = Calendar.getInstance().apply { timeInMillis = now }
+    val sameYear = cal.get(Calendar.YEAR) == nowCal.get(Calendar.YEAR)
+    val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(at))
+    if (sameYear && cal.get(Calendar.DAY_OF_YEAR) == nowCal.get(Calendar.DAY_OF_YEAR)) return "今天 $time"
+    val yesterdayCal = Calendar.getInstance().apply {
+        timeInMillis = now
+        add(Calendar.DAY_OF_YEAR, -1)
+    }
+    if (cal.get(Calendar.YEAR) == yesterdayCal.get(Calendar.YEAR) &&
+        cal.get(Calendar.DAY_OF_YEAR) == yesterdayCal.get(Calendar.DAY_OF_YEAR)
+    ) {
+        return "昨天 $time"
+    }
+    val pattern = if (sameYear) "MM-dd HH:mm" else "yyyy-MM-dd"
+    return SimpleDateFormat(pattern, Locale.getDefault()).format(Date(at))
+}
+
+/** 状态语义色（成功/失败/进行中/从未）；不靠颜色点表达状态，胶囊自带文字。 */
+private enum class StatusTone { Ok, Fail, Busy, Never }
+
+/** 状态胶囊：语义色 + 文字，TalkBack 可读。 */
+@Composable
+private fun StatusBadge(text: String, tone: StatusTone) {
+    val container = when (tone) {
+        StatusTone.Ok -> MaterialTheme.colorScheme.primaryContainer
+        StatusTone.Fail -> MaterialTheme.colorScheme.errorContainer
+        StatusTone.Busy -> MaterialTheme.colorScheme.secondaryContainer
+        StatusTone.Never -> MaterialTheme.colorScheme.surfaceContainerHighest
+    }
+    val content = when (tone) {
+        StatusTone.Ok -> MaterialTheme.colorScheme.onPrimaryContainer
+        StatusTone.Fail -> MaterialTheme.colorScheme.onErrorContainer
+        StatusTone.Busy -> MaterialTheme.colorScheme.onSecondaryContainer
+        StatusTone.Never -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Surface(shape = RoundedCornerShape(50), color = container, contentColor = content) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            softWrap = false,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+        )
+    }
 }
 
 /**
- * 当前生效的备份服务（一行）。
+ * 功能卡头部：标题 + 状态胶囊一行，下面一行"最有用的那句话"。
+ *
+ * 不做 40dp 图标底：图标只占一行高度，却要吃掉 52dp 横向空间（还带一圈底色），
+ * 把标题与状态挤成多行。卡片的视觉锚点交给主按钮的图标（立即同步 / 立即备份），
+ * 分组语义交给 [SettingsSection] 标题。
+ *
+ * 第二行按状态自适应，永远只有一句话：还没成功过时讲"这个功能做什么"，
+ * 成功过之后讲"上次成功 + 云端规模"——避免副标题与状态各占一行、信息挤在一起。
+ */
+@Composable
+private fun FeatureCardHeader(
+    title: String,
+    infoText: String,
+    badgeText: String,
+    badgeTone: StatusTone,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            // weight 让标题最后测量：胶囊先拿到完整宽度，标题用省略号而不是换行
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            StatusBadge(text = badgeText, tone = badgeTone)
+        }
+        Text(
+            text = infoText,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+/** 上次失败提示行：原因 + 重试（失败不再只是 snackbar 一闪而过）。 */
+@Composable
+private fun FailureRow(message: String, enabled: Boolean, onRetry: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = Icons.Default.Warning,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.error,
+            modifier = Modifier.size(16.dp)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = "上次失败：$message",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.weight(1f)
+        )
+        TextButton(onClick = onRetry, enabled = enabled) { Text("重试") }
+    }
+}
+
+/** 服务引导行（未启用 / 未配置）：说清"做什么、去哪做"，替代"灰按钮 + 一行小字"。 */
+@Composable
+private fun ServiceGuideRow(
+    title: String,
+    subtitle: String,
+    actionText: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = Icons.Default.Warning,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(22.dp)
+        )
+        Spacer(modifier = Modifier.width(16.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Text(
+            text = actionText,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Icon(
+            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary
+        )
+    }
+}
+
+/** 词条卡主体：主动作 + 失败重试 + 云端设备快照展开区。 */
+@Composable
+private fun WordCardActions(
+    busyOp: String?,
+    blocking: Boolean,
+    error: String?,
+    onSync: () -> Unit,
+    snapshotList: List<RemoteBackupEntry>?,
+    expanded: Boolean,
+    onToggleExpanded: () -> Unit,
+) {
+    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (busyOp == "syncAll") {
+            LinearProgressIndicator(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
+            )
+        }
+        if (error != null) {
+            FailureRow(message = error, enabled = !blocking, onRetry = onSync)
+        }
+        Button(
+            onClick = onSync,
+            enabled = !blocking,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            if (busyOp == "syncAll") {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(14.dp),
+                    strokeWidth = 2.dp
+                )
+            } else {
+                Icon(Icons.TwoTone.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
+            }
+            Text("立即同步", modifier = Modifier.padding(start = 8.dp))
+        }
+        // 云端各设备快照：默认收起，每台设备一份固定名包；只读
+        if (snapshotList != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(enabled = !blocking, onClick = onToggleExpanded)
+                    .padding(vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "云端设备快照 ${snapshotList.size} 台",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    Icons.Default.ExpandMore,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            if (expanded) {
+                if (snapshotList.isEmpty()) {
+                    Text(
+                        text = "云端还没有快照；同步后其他设备能拿到本机快照，并自动合并新词。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                } else {
+                    snapshotList.forEach { entry -> RemoteEntryMeta(entry, kbUnit = true) }
+                }
+            }
+        }
+    }
+}
+
+/** 备份卡主体：主动作 + 失败重试 + 云端记录展开区（恢复/删除）。 */
+@Composable
+private fun BackupCardActions(
+    busyOp: String?,
+    blocking: Boolean,
+    serviceReady: Boolean,
+    error: String?,
+    onBackup: () -> Unit,
+    onConfigure: () -> Unit,
+    onRefresh: () -> Unit,
+    remoteList: List<RemoteBackupEntry>?,
+    expanded: Boolean,
+    onToggleExpanded: () -> Unit,
+    onRestore: (RemoteBackupEntry) -> Unit,
+    onDelete: (RemoteBackupEntry) -> Unit
+) {
+    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (busyOp == "backup") {
+            LinearProgressIndicator(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
+            )
+        }
+        if (!serviceReady) {
+            // 不是"灰按钮不说话"：说清为什么不可用 + 一键去配置
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "先配置备份服务才能云备份",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = onConfigure, enabled = !blocking) { Text("去配置") }
+            }
+        }
+        if (error != null) {
+            FailureRow(message = error, enabled = !blocking, onRetry = onBackup)
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Button(
+                onClick = onBackup,
+                modifier = Modifier.weight(1f),
+                enabled = !blocking && serviceReady
+            ) {
+                if (busyOp == "backup") {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Icon(Icons.TwoTone.CloudUpload, contentDescription = null, modifier = Modifier.size(16.dp))
+                }
+                Text(
+                    text = "立即备份",
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.padding(start = 6.dp)
+                )
+            }
+            OutlinedButton(
+                onClick = onToggleExpanded,
+                modifier = Modifier.weight(1f),
+                // 拉列表是只读轻操作：只禁用它自己，不阻塞页面其他动作
+                enabled = busyOp == null || busyOp == "list"
+            ) {
+                if (busyOp == "list") {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp),
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Text(
+                        text = buildString {
+                            append(if (expanded) "收起记录" else "备份记录")
+                            remoteList?.let { append(" ${it.size}") }
+                        },
+                        style = MaterialTheme.typography.labelLarge
+                    )
+                }
+            }
+        }
+        // 云端备份包列表（恢复=覆盖式，自造词按时间戳合并）
+        if (expanded && remoteList == null) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "没拉到备份列表；检查网络或服务配置",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(
+                    onClick = onRefresh,
+                    enabled = busyOp == null || busyOp == "list"
+                ) { Text("重试") }
+            }
+        }
+        if (expanded && remoteList != null) {
+            if (remoteList.isEmpty()) {
+                Text(
+                    text = "还没有备份 · 点「立即备份」创建第一份",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            remoteList.forEach { entry ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        // 远端文件名可能很长（含时间戳/设备 id）：单行省略，别把行高撑成两行
+                        Text(
+                            text = entry.name,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        RemoteEntryMetaRow(entry, mbUnit = true)
+                    }
+                    TextButton(
+                        onClick = { onRestore(entry) },
+                        enabled = !blocking
+                    ) {
+                        if (busyOp == "restore:${entry.id}") {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Text("恢复")
+                        }
+                    }
+                    IconButton(
+                        onClick = { onDelete(entry) },
+                        enabled = !blocking && busyOp != "delete:${entry.id}"
+                    ) {
+                        if (busyOp == "delete:${entry.id}") {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(
+                                Icons.Outlined.Delete,
+                                contentDescription = "删除",
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 云端条目的两行信息（词条区/备份区共用）。 */
+@Composable
+private fun RemoteEntryMeta(entry: RemoteBackupEntry, kbUnit: Boolean) {
+    Column {
+        Text(
+            text = entry.name,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        RemoteEntryMetaRow(entry, mbUnit = !kbUnit)
+    }
+}
+
+@Composable
+private fun RemoteEntryMetaRow(entry: RemoteBackupEntry, mbUnit: Boolean) {
+    Text(
+        text = buildString {
+            if (entry.createdAt > 0) {
+                append(formatBackupTime(entry.createdAt))
+            }
+            if (entry.size >= 0) {
+                if (isNotEmpty()) append(" · ")
+                append(
+                    if (mbUnit) String.format(Locale.getDefault(), "%.1f MB", entry.size / 1024.0 / 1024.0)
+                    else String.format(Locale.getDefault(), "%.1f KB", entry.size / 1024.0)
+                )
+            }
+        },
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.outline
+    )
+}
+
+/**
+ * 当前生效的备份服务（一行）：图标 + 名称 + 状态胶囊（已配置/检查中）+ 上次成功时间 + 协议。
  *
  * 切换入口收进对话框（[SettingsSingleChoiceDialog] 的等价内联实现）：插件多时页面长度恒定，
- * 这里只回答"现在用的是谁、备份协议是什么"。整行**始终可点**——只装一个插件时，
+ * 这里只回答"现在用的是谁、能不能用、上次什么时候成过"。整行**始终可点**——只装一个插件时，
  * 这个入口是页面上唯一能确认候选与协议的地方，藏掉它会让"当前生效的是谁"无处可查。
  */
 @Composable
@@ -703,7 +1144,13 @@ private fun CurrentBackupServiceItem(
     pluginInfo: PluginInfo?,
     pluginId: String?,
     plugin: BackupPlugin?,
+    /** 配置就绪：null=读取中（不显示胶囊，避免误报） */
+    configured: Boolean?,
+    /** 最近一次云端操作成功时间（0=还没有成功过） */
+    lastSuccessAt: Long,
     onClick: () -> Unit,
+    /** 非空时在行内提供「配置」入口（打开独立配置页） */
+    onConfigure: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val icon = remember(pluginId, plugin) {
@@ -724,18 +1171,27 @@ private fun CurrentBackupServiceItem(
         )
         Spacer(modifier = Modifier.width(16.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = pluginInfo?.name ?: pluginId ?: "未选择备份服务",
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.Medium
-            )
-            if (!pluginInfo?.description.isNullOrBlank()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // 名字必须带 weight：Row 先测量非 weight 子项，若名字先吃满宽度，
+                // 后面的状态胶囊只能拿到几 dp —— 会被压成"一条竖着的色条"（已配置三字逐字换行）
                 Text(
-                    text = pluginInfo.description,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    text = pluginInfo?.name ?: pluginId ?: "未选择备份服务",
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
                 )
             }
+            Text(
+                text = if (lastSuccessAt > 0) {
+                    "上次成功 " + formatRelativeTime(lastSuccessAt)
+                } else {
+                    "还没有成功过"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             if (protocols.isNotEmpty()) {
                 Text(
                     text = "备份协议: " + protocols.joinToString("、"),
@@ -744,15 +1200,55 @@ private fun CurrentBackupServiceItem(
                 )
             }
         }
-        Text(
-            text = if (pluginId == null) "选择" else "切换",
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.primary
-        )
+        if (onConfigure != null) {
+            ServiceConfigChip(configured = configured, onClick = onConfigure)
+            Spacer(modifier = Modifier.width(4.dp))
+        }
+        // 「切换」文字去掉：整行可点 + 右侧 chevron 已表达"点开换服务"，
+        // 省下的宽度留给插件名
         Icon(
             imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-            contentDescription = null,
+            contentDescription = "切换备份服务",
             tint = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
+}
+
+/**
+ * 服务行右侧的"状态 + 配置"合一入口：一个可点的状态胶囊，点它就是打开配置页。
+ *
+ * 旧版是「已配置」胶囊 + 「配置」文字按钮两个元素，同一件事占两份横向空间；
+ * 配置状态还没读出来（null）时显示中性的「配置」，不误报"已配置"。
+ */
+@Composable
+private fun ServiceConfigChip(configured: Boolean?, onClick: () -> Unit) {
+    val ready = configured == true
+    AssistChip(
+        onClick = onClick,
+        label = {
+            Text(
+                text = if (ready) "已配置" else "配置",
+                style = MaterialTheme.typography.labelLarge
+            )
+        },
+        trailingIcon = {
+            Icon(
+                imageVector = Icons.Default.Settings,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp)
+            )
+        },
+        // 两款都是"填充款"，因此必须显式去掉描边：M3 的 AssistChip 默认是 outlined
+        // （透明底 + 1dp outline），只改容器色会得到"填充 + 描边"这个规范里不存在的组合。
+        // 已配置 = primaryContainer 填充（状态语义）；状态未读出 = 中性填充，不误报已配置。
+        colors = AssistChipDefaults.assistChipColors(
+            containerColor = if (ready) MaterialTheme.colorScheme.primaryContainer
+            else MaterialTheme.colorScheme.surfaceContainerHighest,
+            labelColor = if (ready) MaterialTheme.colorScheme.onPrimaryContainer
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+            trailingIconContentColor = if (ready) MaterialTheme.colorScheme.onPrimaryContainer
+            else MaterialTheme.colorScheme.onSurfaceVariant
+        ),
+        border = null
+    )
 }

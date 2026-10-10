@@ -36,6 +36,27 @@ class UserDictIoManagerTest {
         assertNull(UserDictIoManager.validateImportText(text))
     }
 
+    /**
+     * 反向保护：词库快照（`<词典名>.userdb.txt`）与码表列序不同——快照是
+     * 「码 \t 词 \t c=.. d=.. t=..」，码表是「词 \t 码 \t 频率」。快照必须被挡下，
+     * 否则 librime 的码表导入器会把码与词写反（静默污染用户词库）。
+     */
+    @Test
+    fun `validateImportText rejects userdb snapshot with guidance`() {
+        val snapshot = listOf(
+            "# Rime user dictionary",
+            "#@/db_name\tpinyin_simp",
+            "#@/db_type\tuserdb",
+            "#@/user_id\t11111111-2222-3333-4444-555555555555",
+            "ni hao \t你好\tc=3 d=4e-08 t=0",
+        ).joinToString("\n")
+
+        val error = UserDictIoManager.validateImportText(snapshot)
+
+        assertNotNull("快照必须被拒绝", error)
+        assertTrue("错误信息应指向导入快照入口: $error", error!!.contains("导入快照"))
+    }
+
     @Test
     fun `validateImportText accepts two column code table`() {
         // 没有频率列也能导入：librime 的 parser 把缺失的 commits 当 0

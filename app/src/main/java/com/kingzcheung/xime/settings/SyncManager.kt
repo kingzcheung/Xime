@@ -8,6 +8,7 @@ import com.kingzcheung.xime.plugin.core.api.RemoteBackupEntry
 import com.kingzcheung.xime.rime.RimeEngine
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.BufferedOutputStream
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -36,9 +37,6 @@ object SyncManager {
     const val REMOTE_SYNC_PREFIX = "rime-sync-"
 
     private const val IMPORT_DIR_PREFIX = "imported"
-
-    /** librime 文本快照的文件头（UserDictManager 导出格式） */
-    private const val SNAPSHOT_MAGIC = "Rime user dictionary export"
 
     // ---------- installation id ----------
 
@@ -85,22 +83,48 @@ object SyncManager {
 
     /**
      * 打包 sync 目录：包内条目为 rime 目录相对路径（sync/...）。
-     * @return zip 字节流；sync 目录不存在或为空时返回 null
+     *
+     * **只打包自造词快照 `*.userdb.txt`**：librime 的 `sync_user_data` 会把用户目录下
+     * 所有顶层 `.yaml`/`.txt`（含 20MB+ 方案词典）镜像进 `sync/<user_id>/`
+     * （`backup_config_files` 任务），而那批镜像 librime **只写不读**
+     * （`UserDictManager::Synchronize` 只找 `<dict>.userdb.txt`）。把它们当词库快照
+     * 推到云上既不是词库、也不会被读回，纯死重量；配置与方案由备份功能两档显式承担。
+     *
+     * @return zip 字节流；sync 目录不存在或没有快照时返回 null
      */
     internal fun packSyncDir(rimeDir: File): ByteArray? {
-        val syncDir = File(rimeDir, "sync")
-        if (!syncDir.isDirectory) return null
         val bos = ByteArrayOutputStream()
-        var count = 0
-        ZipOutputStream(bos).use { zos ->
-            syncDir.walkTopDown().filter { it.isFile }.forEach { f ->
-                zos.putNextEntry(ZipEntry(f.relativeTo(rimeDir).path.replace('\\', '/')))
-                f.inputStream().use { it.copyTo(zos) }
-                zos.closeEntry()
-                count++
-            }
+        return if (packSyncDirToStream(rimeDir, bos) == 0) null else bos.toByteArray()
+    }
+
+    /**
+     * 流式打包 sync 目录到文件（远端推送用：包体不驻留内存）。
+     * @return 写入条目数；0 表示没有快照（文件已删除）
+     */
+    internal fun packSyncDirToFile(rimeDir: File, dest: File): Int {
+        dest.parentFile?.mkdirs()
+        val count = dest.outputStream().use { out ->
+            packSyncDirToStream(rimeDir, BufferedOutputStream(out))
         }
-        return if (count == 0) null else bos.toByteArray()
+        if (count == 0) dest.delete()
+        return count
+    }
+
+    private fun packSyncDirToStream(rimeDir: File, out: java.io.OutputStream): Int {
+        val syncDir = File(rimeDir, "sync")
+        if (!syncDir.isDirectory) return 0
+        var count = 0
+        ZipOutputStream(out).use { zos ->
+            syncDir.walkTopDown()
+                .filter { it.isFile && it.name.endsWith(SNAPSHOT_EXTENSION) }
+                .forEach { f ->
+                    zos.putNextEntry(ZipEntry(f.relativeTo(rimeDir).path.replace('\\', '/')))
+                    f.inputStream().use { it.copyTo(zos) }
+                    zos.closeEntry()
+                    count++
+                }
+        }
+        return count
     }
 
     /**
@@ -109,10 +133,17 @@ object SyncManager {
      * 含路径穿越/逃逸 baseDir 条目的包整体抛出 [SecurityException]。
      * @return 落盘文件数
      */
-    internal fun unpackArchive(baseDir: File, bytes: ByteArray): Int {
+    internal fun unpackArchive(baseDir: File, bytes: ByteArray): Int =
+        unpackArchiveStream(baseDir, ByteArrayInputStream(bytes))
+
+    /** 文件入口（远端拉取的快照包直接流式解包，不读进内存）。 */
+    internal fun unpackArchive(baseDir: File, archive: File): Int =
+        unpackArchiveStream(baseDir, archive.inputStream())
+
+    private fun unpackArchiveStream(baseDir: File, rawInput: java.io.InputStream): Int {
         val canonicalBase = baseDir.canonicalPath + File.separator
         var count = 0
-        ZipInputStream(ByteArrayInputStream(bytes)).use { zis ->
+        ZipInputStream(rawInput).use { zis ->
             while (true) {
                 val entry = zis.nextEntry ?: break
                 if (entry.isDirectory) continue
@@ -134,49 +165,166 @@ object SyncManager {
     private fun isZip(bytes: ByteArray): Boolean =
         bytes.size >= 2 && bytes[0] == 'P'.code.toByte() && bytes[1] == 'K'.code.toByte()
 
-    private fun isSnapshotText(bytes: ByteArray): Boolean {
-        val head = bytes.take(64).toByteArray().toString(Charsets.US_ASCII).trimStart()
-        return head.startsWith(SNAPSHOT_MAGIC)
-    }
-
     private fun queryDisplayName(context: Context, uri: Uri): String? =
         context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
             ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
 
+    // ---------- 导入格式识别（纯函数，单测锚定） ----------
+
+    /**
+     * 文件选择器里的三种合法输入。
+     *
+     * rime 生态里"导出"和"备份"是**两种不同格式**，列序不同、互不通用：
+     * - [SNAPSHOT]（用户词典「备份」/其他设备 sync 产物）：`# Rime user dictionary` 头，
+     *   行 = `码 + 空格 \t 词 \t c=<次数> d=<权重> t=<tick>`，只被快照解析器（UniformRestore）读
+     * - [CODE_TABLE]（用户词典「导出文本码表」/本机用户词典页导出）：`# Rime user dictionary export` 头，
+     *   行 = `词 \t 码 \t 频率`，只被码表导入器（UserDictImporter）读
+     * 二者混用不会报错、只会把码与词写反 —— 必须按格式分流。
+     */
+    internal enum class SnapshotFileKind { ZIP, SNAPSHOT, CODE_TABLE, UNKNOWN }
+
+    /** librime 快照扩展名（`UserDb::snapshot_extension()` = `.userdb.txt`）。 */
+    internal const val SNAPSHOT_EXTENSION = ".userdb.txt"
+
+    private const val SNAPSHOT_HEADER = "# Rime user dictionary"
+    private const val CODE_TABLE_HEADER = "# Rime user dictionary export"
+
+    /** 解析 TSV 头里的 `#@/db_name\t<词典名>`（快照与码表都写这一行）。 */
+    internal fun metaDbName(head: String): String? = head.lineSequence()
+        .firstOrNull { it.startsWith("#@/db_name\t") }
+        ?.substringAfter('\t')
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+
+    /** 读取文件头部文本（识别格式用，最多 8KB；含空字节视为二进制）。 */
+    private fun headText(bytes: ByteArray): String? {
+        val head = bytes.take(8192).toByteArray().toString(Charsets.UTF_8)
+        return if (head.contains('\u0000')) null else head
+    }
+
+    internal fun classifySnapshotFile(fileName: String, bytes: ByteArray): SnapshotFileKind {
+        if (isZip(bytes)) return SnapshotFileKind.ZIP
+        val head = headText(bytes) ?: return SnapshotFileKind.UNKNOWN
+        val firstLine = head.lineSequence().firstOrNull { it.isNotBlank() }?.trim()
+            ?: return SnapshotFileKind.UNKNOWN
+        if (!firstLine.startsWith("#")) {
+            // 无头码表：仍按 <词典名>.txt 认（用户手改过文件）
+            return if (fileName.endsWith(".txt")) SnapshotFileKind.CODE_TABLE else SnapshotFileKind.UNKNOWN
+        }
+        if (firstLine.startsWith(CODE_TABLE_HEADER)) return SnapshotFileKind.CODE_TABLE
+        // `# Rime user dictionary`，更稳的判据是元数据 `#@/db_type userdb`
+        if (firstLine == SNAPSHOT_HEADER || head.contains("#@/db_type\tuserdb")) {
+            return SnapshotFileKind.SNAPSHOT
+        }
+        return SnapshotFileKind.UNKNOWN
+    }
+
+    /**
+     * 快照落盘文件名：优先取 `#@/db_name` 元数据（用户重命名过也能归位），
+     * 退回原文件名；非 `<词典名>.userdb.txt` 形态无法被 librime 合并，返回 null。
+     */
+    internal fun snapshotTargetName(fileName: String, bytes: ByteArray): String? {
+        val head = headText(bytes) ?: return null
+        val dict = metaDbName(head) ?: fileName.removeSuffix(SNAPSHOT_EXTENSION).takeIf {
+            fileName.endsWith(SNAPSHOT_EXTENSION)
+        } ?: return null
+        if (dict.isBlank() || dict.contains('/') || dict.contains('\\') || dict == "." || dict == "..") return null
+        return dict + SNAPSHOT_EXTENSION
+    }
+
+    /** 码表目标词库名：优先 `#@/db_name`，退回 `<词典名>.txt` 的文件名。 */
+    internal fun codeTableDictName(fileName: String, bytes: ByteArray): String? {
+        val head = headText(bytes)
+        val fromMeta = head?.let { metaDbName(it) }
+        val dict = fromMeta ?: fileName.removeSuffix(".txt").takeIf { fileName.endsWith(".txt") }
+        ?: return null
+        if (dict.isBlank() || dict.contains('/') || dict.contains('\\') || dict == "." || dict == "..") return null
+        return dict
+    }
+
+    /** 导入结果（快照文件数与直接入库的词条数分开报，UI 文案据此区分）。 */
+    data class SnapshotImportResult(
+        val snapshotFiles: Int,
+        val importedEntries: Int,
+        val merged: Boolean
+    )
+
     // ---------- 导入 ----------
 
     /**
-     * 导入快照（文件选择器）：接受快照包 zip 与裸 .userdb.txt 文本快照
-     * （其他设备/桌面端在其 sync 目录中生成），落入 sync/imported/<uuid>/，
-     * 随后自动触发一次同步合并。
-     * @return 导入的快照文件数
+     * 导入快照/码表（文件选择器）：
+     * - **快照包 zip**（`sync/<id>/...` 或 `<id>/...`）→ 解到 `sync/imported/<uuid>/` 后随 sync 合并
+     * - **快照文本** `<词典名>.userdb.txt`（用户词典备份、其他设备 sync 产物）→ 同上，
+     *   文件名按 `#@/db_name` 元数据归位
+     * - **词条码表** `<词典名>.txt`（用户词典导出、本机用户词典页导出）→ 按词库名直接
+     *   走 `UserDictManager::Import` 合并入库（不经过 sync）
+     *
+     * 三种格式列序不同，识别错了会静默把码与词写反，故无法识别时明确失败。
      */
-    fun importSnapshots(context: Context, uris: List<Uri>): Result<Int> {
+    fun importSnapshots(context: Context, uris: List<Uri>): Result<SnapshotImportResult> {
         if (uris.isEmpty()) return Result.failure(IllegalArgumentException("未选择文件"))
         val rimeDir = File(context.filesDir, "rime")
         val targetDir = File(File(rimeDir, "sync"), "$IMPORT_DIR_PREFIX/${UUID.randomUUID()}")
         return try {
             targetDir.mkdirs()
-            var count = 0
+            var snapshotFiles = 0
+            var importedEntries = 0
             for (uri in uris) {
                 val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
                     ?: return Result.failure(IllegalStateException("无法读取所选文件"))
-                count += when {
-                    isZip(bytes) -> unpackArchive(targetDir, bytes)
-                    isSnapshotText(bytes) -> {
-                        val raw = queryDisplayName(context, uri) ?: "snapshot.userdb.txt"
-                        val safeName = raw.substringAfterLast('/').replace(Regex("[\\\\/:*?\"<>|]"), "_")
-                        File(targetDir, safeName).writeBytes(bytes)
-                        1
+                val raw = queryDisplayName(context, uri) ?: "snapshot.userdb.txt"
+                val safeName = raw.substringAfterLast('/').replace(Regex("[\\\\/:*?\"<>|]"), "_")
+                when (classifySnapshotFile(safeName, bytes)) {
+                    SnapshotFileKind.ZIP -> snapshotFiles += unpackArchive(targetDir, bytes)
+
+                    SnapshotFileKind.SNAPSHOT -> {
+                        val target = snapshotTargetName(safeName, bytes)
+                            ?: return Result.failure(
+                                IllegalArgumentException(
+                                    "「$safeName」不是可识别的词库快照（应为 <词典名>.userdb.txt）"
+                                )
+                            )
+                        File(targetDir, target).writeBytes(bytes)
+                        snapshotFiles++
                     }
-                    else -> return Result.failure(IllegalArgumentException("无法识别的文件：需要快照 zip 或 .userdb.txt 文本快照"))
+
+                    SnapshotFileKind.CODE_TABLE -> {
+                        val dict = codeTableDictName(safeName, bytes)
+                            ?: return Result.failure(
+                                IllegalArgumentException("「$safeName」没能识别出目标词库，请重命名为 <词典名>.txt")
+                            )
+                        if (!com.kingzcheung.xime.rime.RimeEngine.isInitialized()) {
+                            return Result.failure(
+                                IllegalStateException("导入词条码表需要引擎就绪，请先唤起键盘一次")
+                            )
+                        }
+                        val count = UserDictIoManager.importFrom(context, dict, uri).getOrElse { e ->
+                            return Result.failure(
+                                IllegalArgumentException(
+                                    "「$safeName」是词条码表，但导入词库「$dict」失败：${e.message}"
+                                )
+                            )
+                        }
+                        importedEntries += count
+                    }
+
+                    SnapshotFileKind.UNKNOWN -> return Result.failure(
+                        IllegalArgumentException(
+                            "无法识别「$safeName」：支持快照包 zip、<词典名>.userdb.txt 词库快照、" +
+                                "<词典名>.txt 词条码表"
+                        )
+                    )
                 }
             }
-            if (count == 0) {
-                Result.failure(IllegalArgumentException("所选文件中没有快照"))
-            } else {
-                syncNow(context).map { count }
+            if (snapshotFiles == 0 && importedEntries == 0) {
+                return Result.failure(IllegalArgumentException("所选文件中没有可导入的内容"))
             }
+            // 快照要触发引擎合并；码表已在 Import 里直接入库
+            val merged = if (snapshotFiles > 0) {
+                syncNow(context).getOrElse { return Result.failure(it) }
+                true
+            } else false
+            Result.success(SnapshotImportResult(snapshotFiles, importedEntries, merged))
         } catch (e: SecurityException) {
             Result.failure(e)
         } catch (e: Exception) {
@@ -188,10 +336,20 @@ object SyncManager {
 
     /** 将 sync 目录打包 zip 保存到 Downloads，返回文件名。 */
     fun exportToDownloads(context: Context): Result<String> {
-        val bytes = packSyncDir(File(context.filesDir, "rime"))
-            ?: return Result.failure(IllegalStateException("sync 目录为空，请先执行一次同步"))
+        val rimeDir = File(context.filesDir, "rime")
         val dateStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
-        return RimeExportManager.saveSyncArchive(context, "Xime词库快照-$dateStr.zip", bytes)
+        val fileName = "Xime词库快照-$dateStr.zip"
+        // 先流式打包到 cacheDir（大目录不驻留内存），再搬运到 Downloads
+        val tempZip = File(context.cacheDir, fileName)
+        if (packSyncDirToFile(rimeDir, tempZip) == 0) {
+            return Result.failure(IllegalStateException("sync 目录为空，请先执行一次同步"))
+        }
+        return try {
+            if (RimeExportManager.saveSyncArchive(context, fileName, tempZip)) Result.success(fileName)
+            else Result.failure(IllegalStateException("保存到下载目录失败"))
+        } finally {
+            tempZip.delete()
+        }
     }
 
     // ---------- 远端（备份插件通道） ----------
@@ -218,17 +376,28 @@ object SyncManager {
 
         var pulled = 0
         for (entry in others) {
-            val bytes = plugin.pullBackup(entry.id) ?: continue
-            unpackArchive(File(rimeDir, "sync"), bytes)
-            pulled++
+            val download = plugin.pullBackup(entry.id) ?: continue
+            try {
+                unpackArchive(File(rimeDir, "sync"), download.file)
+                pulled++
+            } finally {
+                plugin.releaseBackup(download.blobId)
+            }
         }
         if (pulled > 0) {
             syncNow(context).getOrElse { return Result.failure(it) }
         }
 
-        val bytes = packSyncDir(rimeDir)
-            ?: return Result.failure(IllegalStateException("本地快照为空"))
-        val push = plugin.pushBackup(myName, bytes)
+        // 推送本机包：流式打包到 cacheDir（包体不进内存），推完即删
+        val snapshot = File(context.cacheDir, myName)
+        if (packSyncDirToFile(rimeDir, snapshot) == 0) {
+            return Result.failure(IllegalStateException("本地快照为空"))
+        }
+        val push = try {
+            plugin.pushBackup(myName, snapshot)
+        } finally {
+            snapshot.delete()
+        }
         if (!push.ok) {
             return Result.failure(IllegalStateException(push.message ?: "上传快照失败"))
         }

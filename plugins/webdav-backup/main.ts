@@ -5,6 +5,11 @@
 // 传输协议：PUT / GET / PROPFIND / DELETE / MKCOL，认证用 Basic Auth
 // （host.crypto.base64），配置经 host.config 存取（密码为宿主加密存储）。
 //
+// 大数据走宿主流式句柄（v3.1 契约）：
+//   - 上传：backup.push 收到 {name, size, archiveId}，archiveId 是宿主已落盘的
+//     备份包句柄，直接交给 host.http.upload 流式 PUT（整包不进 JS 堆）
+//   - 下载：host.http.download 让宿主把响应体流式落盘，返回 blobId 给宿主恢复流程
+//
 // 备份条目 id = 服务器上的绝对路径（已解码），pull/delete 时原样回传。
 //
 // JS 约定（对齐 QuickJS 沙箱）：
@@ -151,14 +156,12 @@ const plugin = definePlugin({
       }
     },
 
-    // 上传备份包
+    // 上传备份包（archiveId 为宿主 blob 句柄，整包经 host.http.upload 流式发送）
     async push(args: XimeBackupPushArgs): Promise<PushBackupResult> {
       const name = args.name || '';
-      const archive = args.archive;
+      const archiveId = args.archiveId || '';
       if (name === '') return { ok: false, message: '备份包名为空' };
-      if (!archive || archive.length === 0) {
-        return { ok: false, message: '备份包为空' };
-      }
+      if (archiveId === '') return { ok: false, message: '备份包为空' };
 
       const { base, basePath, headers, cfg, error } = resolveBase();
       if (error) return { ok: false, message: error };
@@ -168,14 +171,14 @@ const plugin = definePlugin({
       const url = encodePath(base) + '/' + encodePath(name);
 
       try {
-        let res = await host.http.request('PUT', url, headers, archive);
+        let res = await host.http.upload('PUT', url, headers, archiveId);
         if (res.status === 409 || res.status === 404) {
           // 父目录不存在：逐级创建后重试一次
           // （标准 DAV 报 409 Conflict；Alist/Nextcloud 等报 404）
           if (!await ensureCollection(cfg, headers)) {
             return { ok: false, message: '创建远端目录失败' };
           }
-          res = await host.http.request('PUT', url, headers, archive);
+          res = await host.http.upload('PUT', url, headers, archiveId);
         }
         if (res.status === 200 || res.status === 201 || res.status === 204) {
           return { ok: true, id: basePath + '/' + name };
@@ -187,15 +190,18 @@ const plugin = definePlugin({
       }
     },
 
-    // 下载备份包（id 为 list 返回的远端条目 id）
-    async pull(id: string): Promise<Uint8Array | null> {
+    // 下载备份包：宿主流式落盘，返回 blob 句柄（宿主恢复流程消费，失败返回 null）
+    async pull(id: string): Promise<string | null> {
       if (!id || id === '') return null;
       const { origin, headers, error } = resolveBase();
       if (error) return null;
       try {
-        const res = await host.http.request('GET', origin + encodePath(id), headers, null);
-        if (res.status !== 200) return null;
-        return res.body;
+        const res = await host.http.download('GET', origin + encodePath(id), headers);
+        if (res.status !== 200) {
+          host.logError('pull 失败: HTTP ' + res.status + statusDetail(res));
+          return null;
+        }
+        return res.blobId || null;
       } catch (e) {
         host.logError('pull 失败: ' + ((e as Error).message || ''));
         return null;

@@ -365,17 +365,27 @@ interface XimeClipboardSyncExtension {
 // 扩展点：backup（备份）
 // ============================================================
 
-/** 备份上传参数（archive 为宿主生成的备份包字节）。 */
+/**
+ * 备份上传参数（v3.1：备份包以宿主句柄传入，不经 JS 堆）。
+ *
+ * `archiveId` 交给 `host.http.upload` 即可流式发送整包——插件**不要**试图读取
+ * 包内容，它是宿主侧文件的不透明句柄（数十 MB 的完整备份因此不再 OOM）。
+ */
 interface XimeBackupPushArgs {
   name: string;
-  archive: Uint8Array;
+  /** 备份包字节数（可用于展示/服务端校验；真实长度由宿主按文件给出） */
+  size: number;
+  /** 宿主 blob 句柄：`host.http.upload(method, url, headers, archiveId)` */
+  archiveId: string;
 }
 
 /** 远端备份条目。 */
 interface XimeBackupItem {
   id: string;
   name: string;
+  /** 创建时间：**毫秒**时间戳（远端不提供时 0）；给秒会被宿主按 1970 年渲染。 */
   createdAt?: number;
+  /** 字节数（远端不提供时 -1）。 */
   size?: number;
 }
 
@@ -387,10 +397,13 @@ interface XimeBackupPushResult {
 }
 
 interface XimeBackupExtension {
-  /** 上传备份包（resolve true / {ok, id?, message?} 表示结果；可 await 网络 IO）。 */
+  /** 上传备份包（resolve true / {ok, id?, message?} 表示结果；包经 host.http.upload 流式发送）。 */
   push(args: XimeBackupPushArgs): boolean | XimeBackupPushResult | null | Promise<boolean | XimeBackupPushResult | null>;
-  /** 下载备份包（resolve zip 字节；null = 失败；可 await 网络 IO）。 */
-  pull(id: string): Uint8Array | null | Promise<Uint8Array | null>;
+  /**
+   * 下载备份包：用 `host.http.download` 让宿主把响应体流式落盘，
+   * resolve 其 blob 句柄字符串（宿主恢复流程消费）；null = 失败。
+   */
+  pull(id: string): string | null | Promise<string | null>;
   /** 列出远端备份（resolve null = 失败；可 await 网络 IO）。 */
   list(): XimeBackupItem[] | null | Promise<XimeBackupItem[] | null>;
   /** 删除远端备份。 */
@@ -511,6 +524,10 @@ interface XimeHttpResponse {
   headers: Record<string, string>;
   body: Uint8Array;
   text: string;
+  /** 流式下载落盘的宿主句柄（host.http.download 2xx 时非空，此时 body 为空） */
+  blobId?: string | null;
+  /** 流式下载字节数（非流式响应为 -1） */
+  size?: number;
 }
 
 /**
@@ -527,6 +544,29 @@ interface XimeHttp {
     url: string,
     headers: Record<string, string>,
     body?: Uint8Array | null,
+    timeoutMillis?: number
+  ): Promise<XimeHttpResponse>;
+  /**
+   * 流式上传：请求体取自宿主 blob（如 `backup.push` 参数里的 archiveId），
+   * 宿主按块写网络，内存占用与文件大小无关（大备份包必须走本方法）。
+   * 与 request 同形返回响应；失败 reject `XimeError`。
+   */
+  upload(
+    method: string,
+    url: string,
+    headers: Record<string, string>,
+    blobId: string,
+    timeoutMillis?: number
+  ): Promise<XimeHttpResponse>;
+  /**
+   * 流式下载：2xx 响应体由宿主落盘为 blob（body 为空，blobId/size 有效）；
+   * 非 2xx 仍把错误页读进内存（用 body/text 展示原因）。
+   * 落盘句柄由宿主在搬运后释放（如 `backup.pull` 返回的句柄由宿主恢复流程消费）。
+   */
+  download(
+    method: string,
+    url: string,
+    headers: Record<string, string>,
     timeoutMillis?: number
   ): Promise<XimeHttpResponse>;
   /** 打开 SSE 流，resolve sessionId（回调携带该 id）；失败 reject `XimeError` */

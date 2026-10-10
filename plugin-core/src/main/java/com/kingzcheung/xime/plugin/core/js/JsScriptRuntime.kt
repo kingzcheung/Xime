@@ -7,6 +7,8 @@ import com.dokar.quickjs.binding.JsObject
 import com.dokar.quickjs.binding.define
 import com.dokar.quickjs.binding.function
 import com.kingzcheung.xime.plugin.core.config.PluginConfigStore
+import com.kingzcheung.xime.plugin.core.js.http.HttpHostApi
+import com.kingzcheung.xime.plugin.core.js.http.HttpResponse
 import com.kingzcheung.xime.plugin.core.js.http.SseHostApi
 import com.kingzcheung.xime.plugin.core.js.http.SseHostListener
 import com.kingzcheung.xime.plugin.core.js.sdk.JsHostApi
@@ -91,6 +93,9 @@ class JsScriptRuntime(
         /** 插件业务调用（load/call/onLoad/onUnload）超时；超时后插件标记中毒不再执行。 */
         private const val CALL_TIMEOUT_MS = 180_000L
 
+        /** JS 执行线程名前缀（[executor] 单线程）：[awaitIdle] 据此避免自等死锁。 */
+        private const val JS_THREAD_PREFIX = "xime-js-"
+
         /** 网络回调（SSE/WS 事件）超时：回调应短促，恶意死循环回调兜底。 */
         private const val CALLBACK_TIMEOUT_MS = 5_000L
 
@@ -119,6 +124,16 @@ class JsScriptRuntime(
         /** 全局 eval 屏蔽引导脚本（宿主内部使用，插件不可见）。 */
         internal const val BOOTSTRAP_SCOPE = "__ximeHost"
 
+        /**
+         * 二进制参数槽函数名（表达式内形如 `__ximeHost.bin(0)`）。
+         *
+         * 大字节参数**不进 JS 源码**：表达式只携带下标，真实字节经
+         * [JsScriptRuntime.pendingBinaryArgs] 在 evaluate 前置入宿主槽、执行后清空，
+         * 由该函数以 `UByteArray` 原生返回给 JS（quickjs-kt 映射为 `Uint8Array`）。
+         * 历史实现把字节 base64 后拼进 JS 源码求值，N 字节包会同时驻留多份 1.33N 字符串
+         * （实测存活集约 7 倍包体），大备份包直接 OOM。
+         */
+        internal const val BIN_SLOT_FN = "bin"
 
         /** JS 值 → Kotlin（quickjs 返回的 JsObject/List/UByteArray/原生类型 → 纯 Kotlin 结构）。 */
         fun jsToKotlin(value: Any?): Any? = when (value) {
@@ -140,21 +155,26 @@ class JsScriptRuntime(
             else -> value
         }
 
-        /** Kotlin 值 → 内嵌 JS 表达式的字面量（null/bool/数字/JSON 字符串/对象/数组/字节）。 */
-        fun kotlinToJs(value: Any?): String = when (value) {
+        /**
+         * Kotlin 值 → 内嵌 JS 表达式的字面量（null/bool/数字/JSON 字符串/对象/数组/字节）。
+         *
+         * 字节不序列化进源码：收集到 [sink]（顺序即槽下标），表达式内以
+         * `__ximeHost.bin(i)` 引用，见 [BIN_SLOT_FN]。
+         */
+        fun kotlinToJs(value: Any?, sink: MutableList<ByteArray>): String = when (value) {
             null -> "null"
             is Boolean -> if (value) "true" else "false"
-            is ByteArray -> b64Expr(value)
-            is UByteArray -> b64Expr(value.toByteArray())
+            is ByteArray -> binExpr(value, sink)
+            is UByteArray -> binExpr(value.toByteArray(), sink)
             is Int, is Long -> value.toString()
             is Double -> formatNumber(value)
             is Float -> formatNumber(value.toDouble())
             is Number -> value.toDouble().toString()
             is String -> jsStringLiteral(value)
             is Map<*, *> -> value.entries.joinToString(prefix = "{", postfix = "}") { (k, v) ->
-                jsStringLiteral(k.toString()) + ":" + kotlinToJs(v)
+                jsStringLiteral(k.toString()) + ":" + kotlinToJs(v, sink)
             }
-            is List<*> -> value.joinToString(prefix = "[", postfix = "]") { kotlinToJs(it) }
+            is List<*> -> value.joinToString(prefix = "[", postfix = "]") { kotlinToJs(it, sink) }
             else -> throw IllegalArgumentException("不支持的 JS 参数类型: ${value.javaClass.name}")
         }
 
@@ -174,9 +194,10 @@ class JsScriptRuntime(
             }
         }
 
-        private fun b64Expr(bytes: ByteArray): String {
-            val b64 = java.util.Base64.getEncoder().encodeToString(bytes)
-            return "$BOOTSTRAP_SCOPE.b64(" + jsStringLiteral(b64) + ")"
+        /** 字节 → 槽位引用表达式（O(1) 长度，与包体大小无关）。 */
+        private fun binExpr(bytes: ByteArray, sink: MutableList<ByteArray>): String {
+            sink.add(bytes)
+            return "$BOOTSTRAP_SCOPE.$BIN_SLOT_FN(${sink.size - 1})"
         }
     }
 
@@ -184,7 +205,7 @@ class JsScriptRuntime(
 
     /** 网络回调槽（SSE/WS 事件）投递线程：与业务调用共享单线程执行器（串行）。 */
     private val executor = Executors.newSingleThreadExecutor { r ->
-        Thread(r, "xime-js-$pluginId").apply { isDaemon = true }
+        Thread(r, JS_THREAD_PREFIX + pluginId).apply { isDaemon = true }
     }
 
     /**
@@ -201,8 +222,34 @@ class JsScriptRuntime(
     /** QuickJS 引擎：JS 执行经 [executor] 串行；async job 在 [asyncJobExecutor]。 */
     private val engine: QuickJs = QuickJs.create(asyncJobExecutor.asCoroutineDispatcher())
 
+    /**
+     * 本次 evaluate 可用的二进制参数（表达式内 `__ximeHost.bin(i)` 按下标取用）。
+     *
+     * 调用方在 [runGuarded] 内先置入、执行完清空；`bin` 槽函数与 evaluate 都在
+     * [executor] 线程执行，字段用不可变 List 整体替换（volatile）保证可见性，
+     * 不给取消/超时路径留半清理状态。
+     */
+    @Volatile
+    private var pendingBinaryArgs: List<ByteArray> = emptyList()
+
     @Volatile
     private var loaded = false
+
+    /**
+     * 关闭标志：[close] 一开始就置位，此后一切调用按"无结果"处理，不再触碰引擎。
+     *
+     * 关闭与调用天然并发（设置页在组合期读 settings.schema，而插件可能正在被停用/重载）。
+     * 旧实现只在 close() 末尾清 [loaded]，并直接 engine.close() + shutdownNow()：
+     * 竞态窗口内被受理的调用会落到已关闭的引擎上，抛出
+     * `QuickJsException: Already closed`，被记成"[脚本错误] 调用 settings.schema"，
+     * 误导用户去更新插件；队列里尚未开始的调用则被 shutdownNow 取消，又被
+     * [isInterruptLike] 判成超时并让插件中毒。
+     */
+    @Volatile
+    private var closed = false
+
+    /** 关闭期间被受理的调用：Callable 内二次判定后抛出，转为"无结果"（无栈，零开销）。 */
+    private class RuntimeClosedSignal : RuntimeException(null, null, false, false)
 
     @Volatile
     private var poisoned = false
@@ -340,6 +387,11 @@ class JsScriptRuntime(
             }
             function("b64Encode") { args ->
                 bytes(args, 0)?.let { java.util.Base64.getEncoder().encodeToString(it) }
+            }
+            // 二进制参数槽：表达式 `__ximeHost.bin(i)` 取本次调用的第 i 个字节载荷。
+            // 越界/已清空返回 null（插件拿到 undefined，不会拿到上一次调用的残留字节）。
+            function(BIN_SLOT_FN) { args ->
+                pendingBinaryArgs.getOrNull(num(args, 0).toInt())?.toUByteArray()
             }
             function("utf8Encode") { args ->
                 str(args, 0).toByteArray(Charsets.UTF_8).toUByteArray()
@@ -525,7 +577,7 @@ class JsScriptRuntime(
                 }
                 var prefix = '${JsPluginContract.BRIDGE_PREFIX}';
                 var tables = [
-                  [globalThis.host.http, ['request', 'stream', 'closeStream'], '网络操作失败'],
+                  [globalThis.host.http, ['request', 'upload', 'download', 'stream', 'closeStream'], '网络操作失败'],
                   [globalThis.host.ws, ['connect', 'sendText', 'sendBinary', 'close'], 'WebSocket 操作失败'],
                   [globalThis.host.zlib, ['gzip', 'gunzip'], '压缩操作失败'],
                   [globalThis.host.resource, ['list'], '目录读取失败']
@@ -614,8 +666,20 @@ class JsScriptRuntime(
 
     // ---- 值转换辅助 ----
 
-    /** Kotlin Map/List → JS 对象字面量表达式。 */
-    private fun kotlinToJsExpr(value: Any?): String = JsScriptRuntime.kotlinToJs(value)
+    /** Kotlin Map/List → JS 对象字面量表达式（顺带收集其中的字节载荷到 [sink]）。 */
+    private fun kotlinToJsExpr(value: Any?, sink: MutableList<ByteArray>): String =
+        JsScriptRuntime.kotlinToJs(value, sink)
+
+    /**
+     * 参数表 → 实参 JS 表达式 + 其中的二进制载荷（顺序即 `__ximeHost.bin(i)` 下标）。
+     *
+     * 字节不进源码是 OOM 修复的关键：表达式长度与包体大小无关，只有字节本身跨桥一次。
+     */
+    internal fun argsExpr(args: List<Any?>): Pair<String, List<ByteArray>> {
+        val binaries = ArrayList<ByteArray>(1)
+        val js = args.joinToString(",") { kotlinToJsExpr(it, binaries) }
+        return js to binaries
+    }
 
     /** safe: Kotlin 值 → JS 可映射值（Map → JsObject，字节 → UByteArray）。 */
     private fun kotlinToJsValue(value: Any?): Any? {
@@ -709,8 +773,42 @@ class JsScriptRuntime(
 
     private fun ObjectBindingScope.buildHttpTable() {
         // async 桥：返回判别式结果（{ok:true,value} | {ok:false,error}），bootstrap 的
-        // host.http.request wrapper 负责 Promise 语义与 throw XimeError（TS 范式）。
+        // host.http.* wrapper 负责 Promise 语义与 throw XimeError（TS 范式）。
         // 阻塞 HTTP 实现经 withContext(IO) 执行，不占用插件线程。
+        // 三个入口（request/upload/download）只在"请求体/响应体是否走宿主 blob"上不同，
+        // 协议语义一律由插件承载（宿主不认识 WebDAV/S3）。
+        fun responseValue(response: HttpResponse): Map<String, Any?> = mapOf(
+            "status" to response.status,
+            "headers" to response.headers,
+            "body" to response.body,
+            "text" to response.body.toString(Charsets.UTF_8),
+            "blobId" to response.blobId,
+            "size" to response.size
+        )
+
+        /** null 响应 → 判别式失败（原因取 lastError/code）；否则携带完整响应字段。 */
+        fun respond(api: HttpHostApi?, response: HttpResponse?): Any? = when {
+            api == null -> kotlinToJsValue(
+                mapOf(
+                    "ok" to false,
+                    "error" to mapOf(
+                        "code" to JsPluginContract.ERR_INTERNAL,
+                        "message" to "http 能力未注入"
+                    )
+                )
+            )
+            response == null -> kotlinToJsValue(
+                mapOf(
+                    "ok" to false,
+                    "error" to mapOf(
+                        "code" to (api.lastErrorCode() ?: JsPluginContract.ERR_NETWORK),
+                        "message" to (api.lastError() ?: "网络请求失败")
+                    )
+                )
+            )
+            else -> kotlinToJsValue(mapOf("ok" to true, "value" to responseValue(response)))
+        }
+
         asyncFunction<Any?>(bridgeName("request")) { args ->
             val method = str(args, 0)
             val url = str(args, 1)
@@ -718,44 +816,37 @@ class JsScriptRuntime(
             val body = bytes(args, 3)
             val timeoutMillis = (args.getOrNull(4) as? Number)?.toInt()?.takeIf { it > 0 }
             val api = httpHostApi
-            if (api == null) {
-                kotlinToJsValue(
-                    mapOf(
-                        "ok" to false,
-                        "error" to mapOf(
-                            "code" to JsPluginContract.ERR_INTERNAL,
-                            "message" to "http 能力未注入"
-                        )
-                    )
-                )
-            } else {
-                val response = withContext(Dispatchers.IO) {
-                    api.request(method, url, headers, body, timeoutMillis)
-                }
-                if (response == null) {
-                    kotlinToJsValue(
-                        mapOf(
-                            "ok" to false,
-                            "error" to mapOf(
-                                "code" to (api.lastErrorCode() ?: JsPluginContract.ERR_NETWORK),
-                                "message" to (api.lastError() ?: "网络请求失败")
-                            )
-                        )
-                    )
-                } else {
-                    kotlinToJsValue(
-                        mapOf(
-                            "ok" to true,
-                            "value" to mapOf(
-                                "status" to response.status,
-                                "headers" to response.headers,
-                                "body" to response.body,
-                                "text" to response.body.toString(Charsets.UTF_8)
-                            )
-                        )
-                    )
-                }
+            val response = api?.let {
+                withContext(Dispatchers.IO) { it.request(method, url, headers, body, timeoutMillis) }
             }
+            respond(api, response)
+        }
+
+        // 流式上传：body 来自宿主 blob（插件只持有不透明 id），大文件不经过 JS 堆
+        asyncFunction<Any?>(bridgeName("upload")) { args ->
+            val method = str(args, 0)
+            val url = str(args, 1)
+            val headers = headersFrom(args.getOrNull(2))
+            val blobId = str(args, 3)
+            val timeoutMillis = (args.getOrNull(4) as? Number)?.toInt()?.takeIf { it > 0 }
+            val api = httpHostApi
+            val response = api?.let {
+                withContext(Dispatchers.IO) { it.upload(method, url, headers, blobId, timeoutMillis) }
+            }
+            respond(api, response)
+        }
+
+        // 流式下载：2xx 正文由宿主落盘为 blob（响应 body 为空，返回 blobId/size）
+        asyncFunction<Any?>(bridgeName("download")) { args ->
+            val method = str(args, 0)
+            val url = str(args, 1)
+            val headers = headersFrom(args.getOrNull(2))
+            val timeoutMillis = (args.getOrNull(3) as? Number)?.toInt()?.takeIf { it > 0 }
+            val api = httpHostApi
+            val response = api?.let {
+                withContext(Dispatchers.IO) { it.download(method, url, headers, timeoutMillis) }
+            }
+            respond(api, response)
         }
 
         if (sseHostApi != null) {
@@ -910,11 +1001,34 @@ class JsScriptRuntime(
 
     /**
      * 在引擎串行调度器上执行 JS 代码并限时。
+     *
+     * @param binaries 本次表达式引用的字节载荷（`__ximeHost.bin(i)`），执行前置入、
+     *   执行后清空；默认空表示表达式内无二进制参数。
      * @return [GuardResult.Ok]（正常返回，value 可为 null）或 [GuardResult.TimedOut]（超时/中断）
      */
-    private fun <T> runGuarded(timeoutMs: Long, poisonOnTimeout: Boolean, block: () -> T): GuardResult<T> {
-        if (poisoned) return GuardResult.TimedOut
-        val future = executor.submit(Callable(block))
+    private fun <T> runGuarded(
+        timeoutMs: Long,
+        poisonOnTimeout: Boolean,
+        binaries: List<ByteArray> = emptyList(),
+        block: () -> T,
+    ): GuardResult<T> {
+        if (poisoned || closed) return GuardResult.TimedOut
+        val future = try {
+            executor.submit(Callable {
+                // 二次判定：任务真正开始执行时运行时可能已关闭。[close] 的屏障只保证
+                // "已开始的调用"先于引擎关闭结束，不保证"提交"与"关闭"之间没有窗口。
+                if (closed) throw RuntimeClosedSignal()
+                pendingBinaryArgs = binaries
+                try {
+                    block()
+                } finally {
+                    pendingBinaryArgs = emptyList()
+                }
+            })
+        } catch (e: java.util.concurrent.RejectedExecutionException) {
+            // 执行器已随关闭销毁：这不是脚本错误，按"无结果"处理。
+            return GuardResult.TimedOut
+        }
         return try {
             GuardResult.Ok(future.get(timeoutMs, TimeUnit.MILLISECONDS))
         } catch (e: TimeoutException) {
@@ -923,11 +1037,26 @@ class JsScriptRuntime(
             GuardResult.TimedOut
         } catch (e: Exception) {
             future.cancel(true)
+            // 关闭引发的失败（关闭信号 / 引擎已关闭 / shutdownNow 取消排队任务）：
+            // 一律按"无结果"处理，既不记脚本错误也不中毒。
+            if (closed || isClosedLike(e)) return GuardResult.TimedOut
             // QuickJsInterruptedException 或中断引发的 CancellationException 视为超时
             if (isInterruptLike(e))
                 interruptAndPoison(poisonOnTimeout)
             throw e
         }
+    }
+
+    /** 是否为"运行时已关闭"引发的失败（关闭信号 / 执行器拒绝 / 引擎已关闭）。 */
+    private fun isClosedLike(e: Throwable): Boolean {
+        var cur: Throwable? = e
+        while (cur != null) {
+            if (cur is RuntimeClosedSignal) return true
+            if (cur is java.util.concurrent.RejectedExecutionException) return true
+            if (cur is QuickJsException && cur.message.orEmpty().contains("closed", ignoreCase = true)) return true
+            cur = cur.cause
+        }
+        return false
     }
 
     private fun isInterruptLike(e: Throwable): Boolean {
@@ -969,6 +1098,16 @@ class JsScriptRuntime(
      * 任一级缺失或末级非函数返回 undefined（不抛 TypeError）。
      */
     private fun callExpr(path: String, argsJs: String): String {
+        return "(${functionGuardExpr(path)}) ? globalThis.plugin.$path($argsJs) : undefined"
+    }
+
+    /**
+     * 方法存在性守卫表达式（路径各级存在且末级为函数）。
+     *
+     * 用途：[callExpr] 与 [hasMethod]——调用不存在的方法不会抛 TypeError，
+     * 而 `typeof ... === 'function'` 是 JS 侧唯一可靠的"方法是否存在"判定。
+     */
+    private fun functionGuardExpr(path: String): String {
         val parts = path.split('.')
         val guards = ArrayList<String>()
         guards += "typeof globalThis.plugin !== 'undefined' && globalThis.plugin"
@@ -977,8 +1116,31 @@ class JsScriptRuntime(
             acc = "$acc.${parts[i]}"
             guards += acc
         }
-        val fn = "globalThis.plugin.$path"
-        return "(${guards.joinToString(" && ")} && typeof $fn === 'function') ? $fn($argsJs) : undefined"
+        guards += "typeof globalThis.plugin.$path === 'function'"
+        return guards.joinToString(" && ")
+    }
+
+    /**
+     * 插件导出对象上是否存在指定路径的方法。
+     *
+     * 与 [call] / [callAsync] 的 null 返回值配合使用：这两个方法对"方法不存在"
+     * 与"方法返回 null"都返回 null（成功语义），仅凭返回值无法区分。设置页按钮
+     * 动作在派发前用它判定，避免"方法不存在"被上层误判为成功。
+     */
+    fun hasMethod(path: String): Boolean {
+        if (!loaded || closed) return false
+        return try {
+            val result = runGuarded(callTimeoutMs, poisonOnTimeout = false) {
+                runBlocking { engine.evaluate<Any?>(functionGuardExpr(path), filename = entryScript) }
+            }
+            when (result) {
+                is GuardResult.Ok -> result.value as? Boolean ?: false
+                GuardResult.TimedOut -> false
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "hasMethod '$path' failed for $pluginId: ${e.message}", e)
+            false
+        }
     }
 
     /** 构造回调槽表达式：`plugin.onWsMessage(...)`；回调槽缺失静默 undefined。 */
@@ -991,10 +1153,10 @@ class JsScriptRuntime(
     /** 投递事件到 JS 导出对象回调槽（短超时，不中毒）。 */
     private fun dispatchCallback(method: String, args: List<Any?>) {
         if (!loaded || poisoned) return
-        val argsJs = args.joinToString(",") { kotlinToJsExpr(it) }
+        val (argsJs, binaries) = argsExpr(args)
         val expr = slotExpr(method, argsJs)
         try {
-            runGuarded(callbackTimeoutMs, poisonOnTimeout = false) {
+            runGuarded(callbackTimeoutMs, poisonOnTimeout = false, binaries = binaries) {
                 runBlocking { engine.evaluate<Any?>(expr, filename = entryScript) }
             }
         } catch (e: Exception) {
@@ -1028,11 +1190,11 @@ class JsScriptRuntime(
 
     private fun invokeEventCallback(event: PluginEvent) {
         if (!loaded || poisoned) return
-        val payloadJs = kotlinToJsExpr(event.payload)
+        val (payloadJs, binaries) = argsExpr(listOf(event.payload))
         val slotPath = JsPluginContract.PATH_EVENTS_PREFIX + JsPluginContract.eventSlotName(event.type)
         val expr = callExpr(slotPath, payloadJs)
         try {
-            runGuarded(callbackTimeoutMs, poisonOnTimeout = false) {
+            runGuarded(callbackTimeoutMs, poisonOnTimeout = false, binaries = binaries) {
                 runBlocking { engine.evaluate<Any?>(expr, filename = entryScript) }
             }
         } catch (e: Exception) {
@@ -1045,21 +1207,23 @@ class JsScriptRuntime(
 
     fun transformCandidates(request: CandidateTransformRequest): CandidateTransformOutcome {
         if (!loaded) return CandidateTransformOutcome.NoResponse
-        val reqJs = kotlinToJsExpr(
-            mapOf(
-                "inputText" to request.inputText,
-                "preedit" to request.preedit,
-                "asciiMode" to request.asciiMode,
-                "candidates" to request.candidates.map {
-                    mapOf("text" to it.text, "comment" to it.comment)
-                }
+        val (reqJs, binaries) = argsExpr(
+            listOf(
+                mapOf(
+                    "inputText" to request.inputText,
+                    "preedit" to request.preedit,
+                    "asciiMode" to request.asciiMode,
+                    "candidates" to request.candidates.map {
+                        mapOf("text" to it.text, "comment" to it.comment)
+                    }
+                )
             )
         )
         val expr = "(typeof globalThis.plugin !== 'undefined' && globalThis.plugin && " +
             "globalThis.plugin.transform && typeof globalThis.plugin.transform.candidates === 'function') ? " +
             "JSON.parse(JSON.stringify(globalThis.plugin.transform.candidates($reqJs))) : null"
         return try {
-            val result = runGuarded(TRANSFORM_TIMEOUT_MS, poisonOnTimeout = false) {
+            val result = runGuarded(TRANSFORM_TIMEOUT_MS, poisonOnTimeout = false, binaries = binaries) {
                 runBlocking { engine.evaluate<Any?>(expr, filename = entryScript) }
             }
             val value = when (result) {
@@ -1161,7 +1325,7 @@ class JsScriptRuntime(
 
     /** 生命周期调用（async 感知：插件可声明 async onLoad/onUnload，宿主等到 settle）。 */
     private fun invokeLifecycle(name: String) {
-        if (!loaded || poisoned) return
+        if (!loaded || poisoned || closed) return
         try {
             runGuarded(callTimeoutMs, poisonOnTimeout = true) {
                 runBlocking {
@@ -1185,11 +1349,11 @@ class JsScriptRuntime(
      * @return JS 返回值（已转纯 Kotlin 结构）；方法不存在 / 报错 / 超时返回 null
      */
     fun call(name: String, vararg args: Any?): Any? {
-        if (!loaded) return null
+        if (!loaded || closed) return null
         return try {
-            val argsJs = args.joinToString(",") { kotlinToJsExpr(it) }
+            val (argsJs, binaries) = argsExpr(args.toList())
             val expr = callExpr(name, argsJs)
-            val result = runGuarded(callTimeoutMs, poisonOnTimeout = true) {
+            val result = runGuarded(callTimeoutMs, poisonOnTimeout = true, binaries = binaries) {
                 runBlocking { engine.evaluate<Any?>(expr, filename = entryScript) }
             }
             when (result) {
@@ -1216,11 +1380,11 @@ class JsScriptRuntime(
      * @return 返回值（已转纯 Kotlin 结构）；方法不存在 / rejected / 报错 / 超时返回 null
      */
     fun callAsync(name: String, vararg args: Any?): Any? {
-        if (!loaded) return null
+        if (!loaded || closed) return null
         return try {
-            val argsJs = args.joinToString(",") { kotlinToJsExpr(it) }
+            val (argsJs, binaries) = argsExpr(args.toList())
             val invoke = callExpr(name, argsJs)
-            val result = runGuarded(callTimeoutMs, poisonOnTimeout = true) {
+            val result = runGuarded(callTimeoutMs, poisonOnTimeout = true, binaries = binaries) {
                 runBlocking {
                     engine.evaluate<Any?>(asyncStashExpr(invoke), filename = entryScript)
                     engine.evaluate<Any?>(asyncReadExpr(), filename = entryScript)
@@ -1288,9 +1452,14 @@ class JsScriptRuntime(
     }
 
     fun close() {
+        if (closed) return
         try {
+            // onUnload 需要引擎可用：必须在置 [closed] 之前跑完。
             callOnUnload()
         } finally {
+            // 1) 先置关闭标志并清 loaded：此后到达的调用一律按"无结果"返回，不再投递。
+            closed = true
+            loaded = false
             eventScope?.cancel()
             eventScope = null
             eventChannel?.close()
@@ -1298,13 +1467,32 @@ class JsScriptRuntime(
             subscribedEvents = emptySet()
             activeSseSessions.forEach { sseHostApi?.close(it) }
             activeSseSessions.clear()
+            // 2) 等已受理的调用跑完，再关引擎：避免引擎在 JS 执行中被关闭
+            //    （旧实现先 engine.close() 再 shutdownNow：正在执行的调用报
+            //    "Already closed"，排队中的调用被取消并被误判为超时中毒）。
+            awaitIdle()
             try {
                 engine.close()
             } catch (_: Exception) {
             }
             executor.shutdownNow()
             asyncJobExecutor.shutdownNow()
-            loaded = false
+        }
+    }
+
+    /**
+     * 等待 [executor] 上已受理的调用结束（单线程 FIFO：投递空任务即屏障）。
+     *
+     * 关闭阶段投递的调用会被 [closed] 拦下，故屏障只会等到"关闭前已开始"的调用。
+     * 等待上限与 [callTimeoutMs] 同量级；真死循环的插件由超时路径中断，不会永久挂住。
+     */
+    private fun awaitIdle() {
+        // close() 若由 JS 线程自身调用（onUnload 路径），投递屏障会自等死锁。
+        if (Thread.currentThread().name.startsWith(JS_THREAD_PREFIX)) return
+        try {
+            executor.submit(Callable { }).get(callTimeoutMs, TimeUnit.MILLISECONDS)
+        } catch (_: Exception) {
+            // 等待失败/超时：不再等待，按既有语义继续关闭
         }
     }
 }

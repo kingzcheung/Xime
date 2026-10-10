@@ -31,7 +31,8 @@ package com.kingzcheung.xime.plugin.core.js.sdk
  * - speech.configure(options) / speech.feed(chunk) / speech.start() /
  *   speech.stop() / speech.cancel()
  * - clipboardSync.push(profile) / clipboardSync.pull() / clipboardSync.test()
- * - backup.push(args) / backup.pull(id) / backup.list() / backup.remove(id) / backup.test()
+ * - backup.push({name, size, archiveId}) / backup.pull(id) / backup.list() /
+ *   backup.remove(id) / backup.test()（大包走宿主 blob 句柄，见 [PATH_BACKUP_PUSH]）
  * - events.onXxx(payload)（事件类型 input_changed → 槽名 onInputChanged，见 [eventSlotName]）
  * - ws.onOpen / ws.onMessage / ws.onBinary / ws.onError / ws.onClose
  * - sse.onData / sse.onDone / sse.onError
@@ -57,8 +58,12 @@ object JsPluginContract {
      * v3 = TS 范式：异步服务（await + Promise）、结构化错误（throw XimeError）、
      * 扩展点 async 支持（panel/speech/clipboardSync/backup/onLoad）。
      * 破坏性变更，插件须随之提升大版本（manifest.version）。
+     *
+     * v3.1 = 大文件流式：backup 扩展点改为 blob 句柄（push 收 archiveId / pull 返回
+     * blobId），host.http 新增 upload / download。**backup 型插件为破坏性变更**，
+     * 须同步提升 manifest.version 并声明 minHostVersion >= 3.0.1。
      */
-    const val SDK_VERSION = "3.0.0"
+    const val SDK_VERSION = "3.1.0"
 
     // ---- 宿主注入的全局对象 ----
     const val GLOBAL_HOST = "host"
@@ -108,6 +113,14 @@ object JsPluginContract {
     const val PATH_SETTINGS_SCHEMA = "settings.schema"
     const val PATH_SETTINGS_OPTIONS = "settings.options"
 
+    /**
+     * 设置表单里的「测试连接」按钮动作 id（UiNodeType.BUTTON 的 key）。
+     *
+     * 该动作**不是**插件顶层函数，而是宿主能力动作：backup / clipboardSync 两类插件
+     * 的能力接口都提供 `testConnection()`，由适配器把该 key 路由到能力方法。
+     */
+    const val ACTION_TEST_CONNECTION = "testConnection"
+
     // ---- 候选词变换（transform，hotPath） ----
     const val PATH_TRANSFORM_CANDIDATES = "transform.candidates"
 
@@ -135,7 +148,10 @@ object JsPluginContract {
     const val PATH_CLIPBOARD_TEST = "clipboardSync.test"
 
     // ---- backup ----
+    /** 上传备份包：入参 `{name, size, archiveId}`，archiveId 交给 host.http.upload 流式发送。 */
     const val PATH_BACKUP_PUSH = "backup.push"
+
+    /** 下载备份包：返回 host.http.download 落盘的 blob 句柄字符串（宿主恢复流程消费）。 */
     const val PATH_BACKUP_PULL = "backup.pull"
     const val PATH_BACKUP_LIST = "backup.list"
     const val PATH_BACKUP_REMOVE = "backup.remove"

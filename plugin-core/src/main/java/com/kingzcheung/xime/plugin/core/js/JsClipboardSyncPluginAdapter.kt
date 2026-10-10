@@ -91,4 +91,16 @@ class JsClipboardSyncPluginAdapter(
             e.message ?: "connection test failed"
         }
     }
+
+    /**
+     * 设置表单按钮动作派发。
+     *
+     * 插件的「测试连接」按钮 key 是 [JsPluginContract.ACTION_TEST_CONNECTION]，它**不是**
+     * 插件顶层函数，而是宿主能力动作：此处映射到本适配器的 [testConnection]（即 JS
+     * `clipboardSync.test()`）。不映射的话基类会当作顶层函数查找并落空，导致按钮静默"成功"。
+     */
+    override suspend fun onAction(action: String): String? = when (action) {
+        JsPluginContract.ACTION_TEST_CONNECTION -> testConnection()
+        else -> super<JsPluginAdapter>.onAction(action)
+    }
 }

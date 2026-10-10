@@ -49,7 +49,8 @@ interface AsrPlugin : IPluginEntryClass, IPluginConfigurable {
      */
     fun getCapabilities(): PluginCapabilities.SpeechCapabilities
 
-    fun isConfigured(): Boolean
+    /** 配置就绪判定（见 [IPluginConfigurable.isConfigured]）。 */
+    override fun isConfigured(): Boolean
 
     fun createBackend(context: Context): AsrPluginBackend
 }

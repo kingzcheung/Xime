@@ -10,6 +10,7 @@ import com.kingzcheung.xime.plugin.core.model.PluginContext
 import com.kingzcheung.xime.plugin.core.model.PluginInfo
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -161,10 +162,68 @@ class JsWebdavBackupListTest {
             assertEquals("Xime配置-2026-09-06.zip", item?.name)
             assertEquals("/dav/xime_backup/Xime配置-2026-09-06.zip", item?.id)
             assertEquals(5598773L, item?.size)
-            assertTrue("createdAt 应 > 0", (item?.createdAt ?: 0) > 0)
+            // 契约是**毫秒**：断言量级而不是仅仅 > 0——旧实现返回秒（1.76e9）也能 > 0，
+            // 却在 UI 上渲染成 1970-01-21（真机反馈"创建日期显示 1970 年"）
+            assertTrue(
+                "createdAt 应是毫秒时间戳（> 2020-09），实际 ${item?.createdAt}",
+                (item?.createdAt ?: 0) > 1_600_000_000_000L
+            )
             // PROPFIND 打到了带 /dav 前缀的正确地址
             assertEquals("PROPFIND", http.requests[0].first)
             assertEquals("https://dav.jianguoyun.com/dav/xime_backup", http.requests[0].second)
+        } finally {
+            adapter.onUnload()
+        }
+    }
+
+    /**
+     * 回归（issue #1061）：设置页「测试连接」按钮的 key 是宿主能力动作
+     * `testConnection`，必须路由到 `backup.test()` 真正发起请求。
+     *
+     * 曾经的 bug：按钮 action 被当成插件顶层函数 `plugin.testConnection` 查找，
+     * 方法不存在 → callAsync 返回 null → 上层按"无错误消息 = 成功"处理，
+     * 于是无论地址填什么都提示「成功」，且服务器端看不到任何请求。
+     */
+    @Test
+    fun `settings testConnection action actually issues PROPFIND`() {
+        val (adapter, http) = loadPlugin()
+        try {
+            // responseQueue 里预置了一条 207：真发请求才会被消费
+            val error = runBlocking { adapter.onAction("testConnection") }
+
+            assertNull("207 应视为连接成功: $error", error)
+            assertEquals("按钮必须真的发一次请求", 1, http.requests.size)
+            assertEquals("PROPFIND", http.requests[0].first)
+            assertEquals("https://dav.jianguoyun.com/dav/xime_backup", http.requests[0].second)
+        } finally {
+            adapter.onUnload()
+        }
+    }
+
+    /** 回归（issue #1061）：按钮动作对应的能力返回 401 时，错误消息必须冒到设置页。 */
+    @Test
+    fun `settings testConnection action surfaces auth failure`() {
+        val (adapter, http) = loadPlugin()
+        try {
+            http.responseQueue.clear()
+            http.responseQueue.addLast(HttpResponse(401))
+            val error = runBlocking { adapter.onAction("testConnection") }
+
+            assertTrue("应报告认证失败而非静默成功: $error", error.orEmpty().contains("认证失败"))
+        } finally {
+            adapter.onUnload()
+        }
+    }
+
+    /** 未知动作 id 必须报错：不允许再出现"方法不存在却提示成功"的假成功。 */
+    @Test
+    fun `unknown settings action is reported instead of silent success`() {
+        val (adapter, http) = loadPlugin()
+        try {
+            val error = runBlocking { adapter.onAction("noSuchAction") }
+
+            assertTrue("未知动作应返回错误消息: $error", error.orEmpty().contains("未知操作"))
+            assertTrue("未知动作不应发起网络请求", http.requests.isEmpty())
         } finally {
             adapter.onUnload()
         }

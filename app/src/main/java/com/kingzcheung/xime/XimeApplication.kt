@@ -73,8 +73,14 @@ class XimeApplication : Application(), ImageLoaderFactory {
         PluginManager.wsHostApiFactory = { pluginId ->
             com.kingzcheung.xime.plugin.ws.WsHostApiImpl(this, pluginId)
         }
+        // 大文件句柄仓库（流式上传/下载用）：与 http 能力共享同一实例，
+        // backup.push 登记的备份包句柄才能被 host.http.upload 解析到。
+        val blobStore = com.kingzcheung.xime.plugin.http.PluginBlobStore(
+            File(cacheDir, "plugin-blobs")
+        )
+        PluginManager.blobStoreFactory = { blobStore }
         PluginManager.httpHostApiFactory = { pluginId ->
-            com.kingzcheung.xime.plugin.http.HttpHostApiImpl(this, pluginId)
+            com.kingzcheung.xime.plugin.http.HttpHostApiImpl(this, pluginId, blobStore)
         }
         PluginManager.sseHostApiFactory = { pluginId ->
             com.kingzcheung.xime.plugin.http.SseHostApiImpl(this, pluginId)
