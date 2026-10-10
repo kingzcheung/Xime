@@ -1,4 +1,4 @@
-﻿package com.kingzcheung.xime.ui.settings
+package com.kingzcheung.xime.ui.settings
 
 import android.widget.Toast
 import androidx.compose.foundation.background
@@ -2326,35 +2326,46 @@ private fun PluginVersionDownloadButton(
             color = MaterialTheme.colorScheme.outline,
         )
 
-        item.installed && item.hasUpdate -> Button(
-            onClick = onDownload,
-            shape = RoundedCornerShape(12.dp),
-            colors = ButtonDefaults.buttonColors(
-                // 更新按钮用第三色与「下载」的主色区分，便于一眼定位可更新项
-                containerColor = MaterialTheme.colorScheme.tertiary,
-                contentColor = MaterialTheme.colorScheme.onTertiary,
-            ),
-            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
+        // 逐版本判定：只有"本机装的这一版"说已安装，只有"索引当前版"给更新，
+        // 其余历史版本给「下载」（旧实现用插件级 installed → 每张卡都显示已安装）
+        else -> when (
+            pluginVersionAction(
+                installedVersion = item.installedVersion,
+                hasUpdate = item.hasUpdate,
+                currentVersion = item.plugin.currentVersion,
+                version = version.version,
+            )
         ) {
-            Text("更新", style = MaterialTheme.typography.labelSmall)
-        }
+            PluginVersionAction.Installed -> Text(
+                "已安装",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
 
-        item.installed -> Text(
-            "已安装",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.outline,
-        )
+            PluginVersionAction.Update -> Button(
+                onClick = onDownload,
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    // 更新按钮用第三色与「下载」的主色区分，便于一眼定位可更新项
+                    containerColor = MaterialTheme.colorScheme.tertiary,
+                    contentColor = MaterialTheme.colorScheme.onTertiary,
+                ),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
+            ) {
+                Text("更新", style = MaterialTheme.typography.labelSmall)
+            }
 
-        else -> Button(
-            onClick = onDownload,
-            shape = RoundedCornerShape(12.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
-            ),
-            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
-        ) {
-            Text("下载", style = MaterialTheme.typography.labelSmall)
+            PluginVersionAction.Download -> Button(
+                onClick = onDownload,
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                ),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
+            ) {
+                Text("下载", style = MaterialTheme.typography.labelSmall)
+            }
         }
     }
 }

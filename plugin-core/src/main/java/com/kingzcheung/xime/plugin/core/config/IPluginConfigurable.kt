@@ -60,6 +60,15 @@ interface IPluginConfigurable {
     fun getSettingsSchema(): List<UiNode> = emptyList()
 
     /**
+     * 配置是否就绪（必填项都已填）。
+     *
+     * 供设置类界面显示"未配置 + 去配置"引导，而不是把主按钮灰着不说话。
+     * 默认 true（无必填项的插件天然就绪）；JS 插件由 [com.kingzcheung.xime.plugin.core.js.JsPluginAdapter]
+     * 按 schema 的 required 字段判定。
+     */
+    fun isConfigured(): Boolean = true
+
+    /**
      * 动态选项：表单渲染 SELECT / MULTI_SELECT 时，若 [UiNode.options]
      * 为空则调用本方法异步拉取（插件自行实现，如模型列表等运行时接口数据）。
      * 返回 null 表示无动态选项。

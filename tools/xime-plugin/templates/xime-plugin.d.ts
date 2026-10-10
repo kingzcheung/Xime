@@ -383,7 +383,9 @@ interface XimeBackupPushArgs {
 interface XimeBackupItem {
   id: string;
   name: string;
+  /** 创建时间：**毫秒**时间戳（远端不提供时 0）；给秒会被宿主按 1970 年渲染。 */
   createdAt?: number;
+  /** 字节数（远端不提供时 -1）。 */
   size?: number;
 }
 

@@ -126,9 +126,9 @@ open class JsPluginAdapter(
     }
 
     /**
-     * 通用配置就绪判定：所有 required 配置字段均已有值。
+     * 通用配置就绪判定：所有 required 配置字段均已有值（见 [IPluginConfigurable.isConfigured]）。
      */
-    open fun isConfigured(): Boolean {
+    override fun isConfigured(): Boolean {
         val schema = getSettingsSchema()
         if (schema.isEmpty()) return true
         return schema.none { it.required && it.key != null && pluginContext.configStore.get(it.key).isNullOrBlank() }

@@ -162,7 +162,12 @@ class JsWebdavBackupListTest {
             assertEquals("Xime配置-2026-09-06.zip", item?.name)
             assertEquals("/dav/xime_backup/Xime配置-2026-09-06.zip", item?.id)
             assertEquals(5598773L, item?.size)
-            assertTrue("createdAt 应 > 0", (item?.createdAt ?: 0) > 0)
+            // 契约是**毫秒**：断言量级而不是仅仅 > 0——旧实现返回秒（1.76e9）也能 > 0，
+            // 却在 UI 上渲染成 1970-01-21（真机反馈"创建日期显示 1970 年"）
+            assertTrue(
+                "createdAt 应是毫秒时间戳（> 2020-09），实际 ${item?.createdAt}",
+                (item?.createdAt ?: 0) > 1_600_000_000_000L
+            )
             // PROPFIND 打到了带 /dav 前缀的正确地址
             assertEquals("PROPFIND", http.requests[0].first)
             assertEquals("https://dav.jianguoyun.com/dav/xime_backup", http.requests[0].second)

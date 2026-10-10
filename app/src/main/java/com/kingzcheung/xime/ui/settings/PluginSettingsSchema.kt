@@ -22,6 +22,31 @@ data class PluginSchemaState(
 )
 
 /**
+ * 在 IO 线程读取插件配置就绪状态（必填项是否都填了）。
+ *
+ * 与 [rememberPluginSettingsSchema] 同理：`isConfigured()` 会经 schema 进插件运行时，
+ * 组合期不能同步调。[plugin] 为 null 时返回 null（无插件可判）。
+ */
+@Composable
+fun rememberPluginConfigured(
+    plugin: IPluginConfigurable?,
+    vararg keys: Any?,
+): Boolean? {
+    var configured by remember(plugin, *keys) { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(plugin, *keys) {
+        configured = if (plugin == null) {
+            null
+        } else {
+            withContext(Dispatchers.IO) {
+                // 读取失败按"就绪"处理：宁可少一次引导，也不要误报"未配置"把用户赶去配置页
+                runCatching { plugin.isConfigured() }.getOrElse { true }
+            }
+        }
+    }
+    return configured
+}
+
+/**
  * 读取插件 schema 的容错封装（不负责线程切换）：插件运行时报错（含运行时正在/已经关闭）
  * 一律降级为空 schema，绝不把异常抛进 UI 组合。
  */

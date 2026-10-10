@@ -7,6 +7,7 @@ import com.kingzcheung.xime.plugin.core.model.PluginCapabilities
 import com.kingzcheung.xime.plugin.core.model.PluginInfo
 import com.kingzcheung.xime.plugin.core.model.PluginSource
 import com.kingzcheung.xime.plugin.core.model.PluginToolbarButton
+import com.kingzcheung.xime.plugin.core.runtime.PluginManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.ExperimentalSerializationApi
@@ -427,10 +428,36 @@ class InstallerManager(
             }
             pluginRegistry.flushToDisk()
 
+            // 覆盖安装（更新）后必须重载正在运行的实例：注册表/插件中心显示的是新版本号，
+            // 但内存里跑的还是旧 JS——`JsScriptRuntime.load()` 只在加载时读过一次入口脚本，
+            // 而 `loadEnabledPlugins()` 会跳过已加载插件（插件中心的"刷新"因此也救不了）。
+            //
+            // 真机案例：webdav-backup 2.0.0→3.0.0 把传输契约从"字节 archive"改成"blob 句柄
+            // archiveId"，更新后不重载 → 旧 JS 读不到 archiveId → 备份报"备份包为空"。
+            reloadIfRunning(pluginId)
+
             InstallResult.Success(pluginInfo)
         } catch (e: Exception) {
             pluginDir.deleteRecursively()
             InstallResult.Failure("插件安装失败: ${e.message}", e)
+        }
+    }
+
+    /**
+     * 更新后重载正在运行的实例（[PluginManager.launchPlugin] 对已加载插件就是 reload）。
+     *
+     * 未运行（没加载过 / 已停用）则不动——避免顺手把用户禁用的插件拉起来。
+     * 只有真正替换了文件的覆盖安装会走到这里：[onlyIfNewer] 早退不会。
+     */
+    private suspend fun reloadIfRunning(pluginId: String) {
+        val running = runCatching { PluginManager.getPluginInstance(pluginId) != null }
+            .getOrDefault(false)
+        if (!running) return
+        val reloaded = runCatching { PluginManager.launchPlugin(pluginId) }.getOrDefault(false)
+        if (reloaded) {
+            Log.i("InstallerManager", "插件已更新并重载运行实例: $pluginId")
+        } else {
+            Log.w("InstallerManager", "插件更新后重载失败（需重启应用生效）: $pluginId")
         }
     }
 

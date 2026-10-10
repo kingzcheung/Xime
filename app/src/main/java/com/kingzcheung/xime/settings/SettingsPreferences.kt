@@ -53,6 +53,10 @@ object SettingsPreferences {
 
     private const val KEY_LAST_RIME_SYNC_AT = "last_rime_sync_at"
     private const val KEY_LAST_BACKUP_AT = "last_backup_at"
+    private const val KEY_LAST_SYNC_ERROR = "last_sync_error"
+    private const val KEY_LAST_SYNC_ERROR_AT = "last_sync_error_at"
+    private const val KEY_LAST_BACKUP_ERROR = "last_backup_error"
+    private const val KEY_LAST_BACKUP_ERROR_AT = "last_backup_error_at"
 
     private const val KEY_MODE_CHANGE_TARGET = "mode_change_target"
 
@@ -575,6 +579,41 @@ object SettingsPreferences {
 
     fun setLastBackupAt(context: Context, at: Long) {
         getPrefs(context).edit().putLong(KEY_LAST_BACKUP_AT, at).apply()
+    }
+
+    /**
+     * 最近一次云端词条同步的失败原因（null=没有未消除的失败；成功后清空）。
+     *
+     * 目的：失败不再只是 snackbar 一闪而过——回到「同步与备份」页仍能看到"上次失败 + 重试"。
+     */
+    fun getLastSyncError(context: Context): String? =
+        getPrefs(context).getString(KEY_LAST_SYNC_ERROR, null)
+
+    /** 失败发生时间（毫秒；0=无）。 */
+    fun getLastSyncErrorAt(context: Context): Long =
+        getPrefs(context).getLong(KEY_LAST_SYNC_ERROR_AT, 0L)
+
+    fun setLastSyncError(context: Context, message: String?) =
+        setOpError(context, KEY_LAST_SYNC_ERROR, KEY_LAST_SYNC_ERROR_AT, message)
+
+    /** 最近一次云端完整备份的失败原因（语义同 [getLastSyncError]）。 */
+    fun getLastBackupError(context: Context): String? =
+        getPrefs(context).getString(KEY_LAST_BACKUP_ERROR, null)
+
+    fun getLastBackupErrorAt(context: Context): Long =
+        getPrefs(context).getLong(KEY_LAST_BACKUP_ERROR_AT, 0L)
+
+    fun setLastBackupError(context: Context, message: String?) =
+        setOpError(context, KEY_LAST_BACKUP_ERROR, KEY_LAST_BACKUP_ERROR_AT, message)
+
+    private fun setOpError(context: Context, key: String, atKey: String, message: String?) {
+        val editor = getPrefs(context).edit()
+        if (message.isNullOrBlank()) {
+            editor.remove(key).remove(atKey)
+        } else {
+            editor.putString(key, message).putLong(atKey, System.currentTimeMillis())
+        }
+        editor.apply()
     }
     
     /** 获取方案偏好的键盘布局，默认全键盘 */

@@ -81,7 +81,7 @@ class JsBackupPluginAdapter(
                 RemoteBackupEntry(
                     id = id,
                     name = map["name"]?.toString() ?: id,
-                    createdAt = (map["createdAt"] as? Number)?.toLong() ?: 0L,
+                    createdAt = normalizeRemoteTimestamp((map["createdAt"] as? Number)?.toLong() ?: 0L),
                     size = (map["size"] as? Number)?.toLong() ?: -1L
                 )
             }
@@ -138,5 +138,20 @@ class JsBackupPluginAdapter(
             )
         }
         return BackupResult(ok = (v as? Boolean) ?: false)
+    }
+
+    companion object {
+        /**
+         * 远端时间戳归一化：契约是**毫秒**，但插件可能返回**秒**。
+         *
+         * 真机反馈"列表里创建日期显示 1970 年"就是这么来的：webdav-backup v3.0.0 的
+         * `epochFromParts` 返回秒（1.76e9），宿主当毫秒渲染 → 1970-01-21。
+         * 插件已修，这里再兜一层：**已安装的旧 xipk 不重装也能显示正确时间**。
+         *
+         * 阈值 1e11：秒级时间戳要到 5138 年才会超过它，而毫秒级（2000 年后 ≥ 9.4e11）远大于它；
+         * 0/负数（远端没给时间）原样保留，由 UI 按"未知"处理。
+         */
+        internal fun normalizeRemoteTimestamp(value: Long): Long =
+            if (value in 1..99_999_999_999L) value * 1000 else value
     }
 }
