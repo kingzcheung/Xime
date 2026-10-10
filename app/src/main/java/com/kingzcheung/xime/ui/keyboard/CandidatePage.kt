@@ -49,6 +49,9 @@ import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.layout.layoutId
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -89,12 +92,33 @@ data class CandidatePageState(
     val singleCharFilter: Boolean = false,
     /** 左栏符号列表（九键/笔画复刻各自键盘左栏的 side_symbols）；空=通用快捷符号 */
     val railSymbols: List<String> = emptyList(),
-    /** 左栏宽度 dp（九键对齐其键盘左栏：(屏宽-4)×0.8/5，与其 weight 分配同公式）；
-     *  0=默认固定宽度 */
-    val leftRailWidthDp: Int = 0,
-    /** 左栏垂直缩进 dp（九键对齐其左栏面板 keySpacingY，默认 6=原 Row 垂直边距，
-     *  保证展开/收起切换时左栏顶部位置不跳跃） */
+    /** 左栏宽度 dp（九键对齐其键盘左栏列宽：(页宽-12)×0.8/5，与 weight 分配同公式、
+     *  浮点不取整——取整会带来 ±1dp 的背景宽度差）；0=默认固定宽度 */
+    val leftRailWidthDp: Float = 0f,
+    /** 左栏垂直缩进 dp（非九键布局的外层垂直边距，默认 6=原 Row 垂直边距）。
+     *  九键布局走"键位区+内缩"模型（对齐其键盘左栏）：外层不留垂直边距，改由
+     *  [leftRailBottomInsetDp] 补键盘根容器底部留白，列表容器/切换键各自内缩 */
     val leftRailInsetDp: Int = 6,
+    /** 左栏面板水平缩进 dp（九键对齐其左栏面板 keySpacingX：面板四边带
+     *  LocalKeyVisualPadding 缩进，展开页背景此前无水平缩进导致背景块比键盘态宽、
+     *  展开切换时视觉跳位）；0=无缩进（非九键布局保持原全宽背景） */
+    val leftRailInsetXDp: Float = 0f,
+    /** 左栏键位视觉缩进的垂直分量 dp（九键 keySpacingY）：列表容器与底部切换键
+     *  在各自键位区内缩出与键盘态面板/符号键相同的间隙；0=无缩进 */
+    val leftRailInsetYDp: Float = 0f,
+    /** 左栏键位区底部留白 dp（九键键盘根容器的 bottom=8dp）：对齐九键符号键的
+     *  底边位置——此前展开页 RailKey 直抵页底，比键盘态低 8dp（向下挤压感） */
+    val leftRailBottomInsetDp: Int = 0,
+    /** 右栏键位区宽度 dp（九键对齐其右列列宽：(页宽-12)×0.8/5，浮点不取整）；
+     *  0=默认固定宽度。>0 时右栏走与左栏同款"键位区+内缩"模型（顶从页顶起、
+     *  底部留 [leftRailBottomInsetDp]、键各自内缩 keySpacing），展开/收起切换
+     *  右栏轮廓与键盘态右列一致不跳位 */
+    val rightRailWidthDp: Float = 0f,
+    /** 左栏面板阴影（九键左栏面板带 crispShadow 底衬，展开页同参复刻，
+     *  否则主题开阴影时两处面板色深不一致） */
+    val railShadowEnabled: Boolean = false,
+    val railShadowElevationDp: Float = 0f,
+    val railShadowRadiusDp: Float = 0f,
     /** 左栏音节拼音候选（九键输入/选择态复刻，与键盘左栏同源）；非空时优先于 railSymbols */
     val railPinyinOptions: List<String> = emptyList(),
     /** 拼音候选项选中索引（九键 SELECTION 态），-1 无选中 */
@@ -171,8 +195,29 @@ fun CandidatePage(
     // 九键输入/选择态：左栏显示音节拼音候选（与键盘左栏同源同点击）；空闲态回落符号列表
     val railItems = state.railPinyinOptions.ifEmpty { railSymbols }
     val isPinyinRail = state.railPinyinOptions.isNotEmpty()
-    // 左栏宽度：九键对齐其键盘左栏（宿主按同公式给的 dp 值），其余布局用固定宽度
-    val railWidthModifier = if (state.leftRailWidthDp > 0)
+    // 左栏面板阴影：九键左栏面板带 crispShadow 底衬（主题开阴影时），展开页同参复刻，
+    // 否则两处面板的背景色深不一致（键盘态有暗边、展开态纯平）
+    val density = LocalDensity.current
+    val railShadowModifier = remember(
+        state.railShadowEnabled, state.railShadowElevationDp, state.railShadowRadiusDp,
+        density, keyBg
+    ) {
+        if (state.railShadowEnabled) {
+            val offsetPx = with(density) { state.railShadowElevationDp.dp.toPx() }
+            val cornerPx = with(density) { state.railShadowRadiusDp.dp.toPx() }
+            val color = crispShadowColor(keyBg)
+            Modifier.drawBehind {
+                drawRoundRect(
+                    color = color,
+                    topLeft = Offset(0f, offsetPx),
+                    size = size,
+                    cornerRadius = CornerRadius(cornerPx)
+                )
+            }
+        } else Modifier
+    }
+    // 左栏宽度：九键对齐其键盘左栏（宿主按同公式给的浮点 dp，不取整），其余布局用固定宽度
+    val railWidthModifier = if (state.leftRailWidthDp > 0f)
         Modifier.fillMaxHeight().width(state.leftRailWidthDp.dp)
     else Modifier.fillMaxHeight().width(leftRailWidth)
 
@@ -205,15 +250,31 @@ fun CandidatePage(
                 .fillMaxWidth()
                 .weight(1f)
                 // 垂直边距下放各栏：左栏用 leftRailInsetDp（九键对其键盘左栏面板的
-                // keySpacingY 缩进，切换展开/收起时左栏不跳位），中/右栏保持 6dp 原视觉
-                .padding(horizontal = 8.dp)
+                // keySpacingY 缩进，切换展开/收起时左栏不跳位），中/右栏保持 6dp 原视觉。
+                // start 4dp 对齐九键键盘根容器的 start/end 4dp 边距（左右栏背景的
+                // 边缘要与键盘态面板同起点，展开切换才不横移）；非九键布局由各栏
+                // 自行补足
+                .padding(
+                    start = 4.dp,
+                    end = if (state.rightRailWidthDp > 0f) 4.dp else 8.dp
+                )
         ) {
             // ── 左栏：九键为音节拼音候选（输入/选择态）或 side_symbols（空闲态，
             // 连体面板——圆角背景与滚动裁剪由列表容器统一负责）+ 候选/单字切换（下）。
             // 条目 ≤4 均分填满；>4 最多显示 4 条、LazyColumn 滚动（对齐九键左栏）──
             Column(
                 modifier = railWidthModifier
-                    .padding(vertical = state.leftRailInsetDp.dp),
+                    // 非九键布局补回 Row start 减掉的 4dp（九键布局背景起点须与键盘态
+                    // 面板同源，不再补）
+                    .padding(start = if (state.leftRailWidthDp > 0f) 0.dp else 4.dp)
+                    .padding(
+                        // 九键走"键位区+内缩"模型：外层不留垂直边距（同其键盘左列从
+                        // 键盘区顶起），底部留白对齐键盘根容器的 bottom=8dp——否则
+                        // 底部切换键直抵页底，比键盘态符号键低 8dp（向下挤压）
+                        top = if (state.leftRailWidthDp > 0f) 0.dp else state.leftRailInsetDp.dp,
+                        bottom = if (state.leftRailWidthDp > 0f)
+                            state.leftRailBottomInsetDp.dp else state.leftRailInsetDp.dp
+                    ),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 var railListHeightPx by remember { mutableIntStateOf(0) }
@@ -221,6 +282,14 @@ fun CandidatePage(
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(3f)
+                        // 面板四边内缩对齐九键左栏面板的 LocalKeyVisualPadding
+                        // （keySpacingX/Y）：键盘态面板四边带缩进，展开页背景此前全宽
+                        // 全高导致背景块比键盘态大、展开切换时外扩
+                        .padding(
+                            horizontal = state.leftRailInsetXDp.dp,
+                            vertical = state.leftRailInsetYDp.dp
+                        )
+                        .then(railShadowModifier)
                         // 圆角由容器统一裁剪：列表滚动时内容被裁在圆角内，
                         // 圆角不再依赖首/末 item 的位置（修复滚动时首/尾圆角丢失）
                         .clip(RoundedCornerShape(LocalKeyCornerRadius.current))
@@ -270,7 +339,14 @@ fun CandidatePage(
                 RailKey(
                     onClick = { callbacks.onToggleSingleCharFilter?.invoke() },
                     keyBg = if (state.singleCharFilter) state.textColor.copy(alpha = 0.28f) else keyBg,
-                    modifier = Modifier.weight(1f)
+                    // 键位区内缩（同九键符号键 KeyButton 的 LocalKeyVisualPadding）：
+                    // 视觉块顶/底边与键盘态符号键一致，间隙同为 spacedBy+两侧 keySpacingY
+                    modifier = Modifier
+                        .padding(
+                            horizontal = state.leftRailInsetXDp.dp,
+                            vertical = state.leftRailInsetYDp.dp
+                        )
+                        .weight(1f)
                 ) {
                     // 显示当前模式：候选（全部）/ 单字（筛选中，高亮底色）
                     Text(
@@ -364,15 +440,29 @@ fun CandidatePage(
             Spacer(modifier = Modifier.width(8.dp))
 
             // ── 右栏：退格 / 上一页 / 下一页 / 回车 ──
-            // 竖屏固定方块、垂直居中分布；宽容器/悬浮（页高有限）改为等分压缩
+            // 九键（rightRailWidthDp>0）：与键盘态右列同款"键位区+内缩"模型——列宽
+            // 同公式浮点、顶从页顶起、底部留 leftRailBottomInsetDp、键各自内缩
+            // keySpacing 并 weight 均分，展开/收起切换右栏轮廓不跳位；
+            // 竖屏其余布局保持固定方块、垂直居中分布；宽容器/悬浮改为等分压缩
             val compactRail = isWide || state.rightRailEqualSplit
-            val railKeyModifier = if (compactRail) Modifier.weight(1f) else Modifier.size(46.dp)
+            val t9RightRail = state.rightRailWidthDp > 0f
+            val railKeyModifier = if (compactRail || t9RightRail)
+                Modifier
+                    .padding(
+                        horizontal = state.leftRailInsetXDp.dp,
+                        vertical = state.leftRailInsetYDp.dp
+                    )
+                    .weight(1f)
+            else Modifier.size(46.dp)
             Column(
                 modifier = Modifier
                     .fillMaxHeight()
-                    .width(rightRailWidth)
-                    .padding(vertical = 6.dp),
-                verticalArrangement = if (compactRail) Arrangement.spacedBy(4.dp)
+                    .width(if (t9RightRail) state.rightRailWidthDp.dp else rightRailWidth)
+                    .padding(
+                        top = if (t9RightRail) 0.dp else 6.dp,
+                        bottom = if (t9RightRail) state.leftRailBottomInsetDp.dp else 6.dp
+                    ),
+                verticalArrangement = if (compactRail || t9RightRail) Arrangement.spacedBy(4.dp)
                 else Arrangement.spacedBy(10.dp, Alignment.CenterVertically)
             ) {
                 RailKey(
@@ -666,8 +756,9 @@ private fun FlexRowDivider(color: Color) {
 }
 
 /**
- * 左栏符号/拼音条目（样式对齐数字键盘 NumberSymbolKey）：直角实色条目，
- * 整列连成一体；列容器负责圆角背景与滚动裁剪（首尾圆角不再附着在条目上，
+ * 左栏符号/拼音条目（样式对齐九键键盘左栏 CandidateItem）：条目自身非按压透明
+ * （背景由列容器统一绘制，条目不再叠画 keyBg——半透明主题键色叠两次会变亮），
+ * 列容器负责圆角背景与滚动裁剪（首尾圆角不再附着在条目上，
  * 避免滚动时圆角随首/末条目滚出视口而丢失）。按压背景加深（0.7 透明度）。
  * [isSelected] 时渲染选中胶囊（对齐九键 CandidateItem 的 accentColor 高亮），
  * [isPinyin] 用拼音字号（13sp，对齐九键左栏），否则符号字号 16sp。
@@ -690,7 +781,9 @@ private fun CandidateRailSymbolKey(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .background(if (isPressed) keyBg.copy(alpha = 0.7f) else keyBg)
+            // 非按压透明：容器已画 keyBg，条目再画一遍会把半透明主题键色叠两次
+            // （合成后比键盘左栏面板更亮）；按压加深与九键 CandidateItem 同款
+            .background(if (isPressed) keyBg.copy(alpha = 0.7f) else Color.Transparent)
             .tolerantClick(
                 showRipple = false,
                 interactionSource = interactionSource,
@@ -727,13 +820,16 @@ private fun CandidateRailSymbolKey(
     }
 }
 
-/** 右栏实体按键：圆角方块、按压加深（enabled=false 时淡化）。等分栏高由调用方传 weight。 */
+/** 栏内实体按键：圆角方块、按压加深（enabled=false 时淡化）。等分栏高由调用方传 weight。
+ *  圆角默认取主题键圆角（LocalKeyCornerRadius），与九键右列 KeyButton、数字键盘右栏
+ *  NumberSymbolKey 同源——此前右栏写死 14dp，与键盘态键圆角不一致。 */
 @Composable
 private fun RailKey(
     onClick: () -> Unit,
     keyBg: Color,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    cornerRadius: Dp = LocalKeyCornerRadius.current,
     content: @Composable BoxScope.() -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -741,7 +837,7 @@ private fun RailKey(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(cornerRadius))
             .background(
                 when {
                     !enabled -> keyBg.copy(alpha = 0.4f)
