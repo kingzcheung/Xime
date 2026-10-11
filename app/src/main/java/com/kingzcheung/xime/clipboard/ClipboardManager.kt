@@ -880,6 +880,15 @@ class ClipboardManager private constructor(private val context: Context) {
     }
 
     /**
+     * 拖拽发送用：图片条目的可共享 content URI（FileProvider 优先，MediaStore 降级）。
+     * 非图片条目 / 文件不存在 / 获取失败返回 null（拖拽发起方回退长按菜单）。
+     */
+    fun dragImageUri(item: ClipboardItem): Uri? {
+        val file = imageFileOf(item) ?: return null
+        return getContentUriForImage(file)
+    }
+
+    /**
      * 生成图片 content URI。
      *
      * 优先使用 FileProvider；Android 12+ 部分厂商 ROM 上

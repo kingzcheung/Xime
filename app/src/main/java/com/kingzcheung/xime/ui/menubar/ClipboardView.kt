@@ -63,6 +63,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -70,7 +71,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
+import com.kingzcheung.xime.clipboard.ClipboardDragSender
 import com.kingzcheung.xime.clipboard.ClipboardItem
+import com.kingzcheung.xime.clipboard.clipboardLongPressDrag
 import com.kingzcheung.xime.ui.CLIPBOARD_CARD_MAX_PX
 import com.kingzcheung.xime.ui.rememberClipboardImageRequest
 import com.kingzcheung.xime.ui.keyboard.WIDE_CONTAINER_WIDTH
@@ -101,6 +104,8 @@ fun ClipboardView(
     onSelectImage: ((ClipboardItem) -> Unit)? = null,
     /** 图片条目 → 本地绝对文件（不存在返回 null，用于缩略图与预览）。 */
     imageFileOf: ((ClipboardItem) -> File?)? = null,
+    /** 拖拽发送已成功启动（收起输入法，露出目标应用的接收区域）。 */
+    onDragSendStarted: (() -> Unit)? = null,
 ) {
     // 卡片/格子背景：与菜单项背景一致（keyBgColor，浅色纯白、深色跟随 keyboard.colors）
     val itemBgColor = keyBgColor
@@ -329,6 +334,7 @@ fun ClipboardView(
                     onSelectImage = onSelectImage,
                     onPreviewImage = { item -> previewItem = item },
                     imageFileOf = imageFileOf,
+                    onDragSendStarted = onDragSendStarted,
                 )
             } else {
                 QuickSendTabContent(
@@ -341,6 +347,7 @@ fun ClipboardView(
                     onSelect = onSelectItem,
                     onQuickSendAddClick = onQuickSendAddClick,
                     onQuickSendEditItem = onQuickSendEditItem,
+                    onDragSendStarted = onDragSendStarted,
                     onLongPressItem = { item, isLeftColumn ->
                         menuAnchor = MenuAnchor(item, isLeftColumn, tab = 1)
                     }
@@ -631,7 +638,9 @@ fun ClipboardTabContent(
     onSelectImage: ((ClipboardItem) -> Unit)? = null,
     onPreviewImage: ((ClipboardItem) -> Unit)? = null,
     imageFileOf: ((ClipboardItem) -> File?)? = null,
+    onDragSendStarted: (() -> Unit)? = null,
 ) {
+    val view = LocalView.current
     if (items.isEmpty()) {
         Box(
             modifier = Modifier.fillMaxSize(),
@@ -667,6 +676,15 @@ fun ClipboardTabContent(
                     if (isMultiSelect) onExitMultiSelect()
                     else onLongPressItem(item, index % 2 == 0)
                 }
+                // 拖拽发送：长按后拖出 slop 启动；多选态不启用（选择模式冲突）。
+                // 启动失败（文件缺失/URI 获取失败/系统拒绝）由手势回退长按菜单。
+                val onStartDrag: (() -> Boolean)? = if (isMultiSelect) null else {
+                    {
+                        val ok = ClipboardDragSender.startDragAndDrop(view, item, imageFileOf?.invoke(item))
+                        if (ok) onDragSendStarted?.invoke()
+                        ok
+                    }
+                }
                 if (item.isImage) {
                     ClipboardImageCard(
                         item = item,
@@ -680,6 +698,8 @@ fun ClipboardTabContent(
                         onClick = onClick,
                         onLongClick = onLongClick,
                         onPreviewClick = { onPreviewImage?.invoke(item) },
+                        dragKey = item.id,
+                        onStartDrag = onStartDrag,
                     )
                 } else {
                     GridItemCard(
@@ -690,7 +710,9 @@ fun ClipboardTabContent(
                         accentColor = accentColor,
                         modifier = Modifier.height(62.dp),
                         onClick = onClick,
-                        onLongClick = onLongClick
+                        onLongClick = onLongClick,
+                        dragKey = item.id,
+                        onStartDrag = onStartDrag,
                     )
                 }
             }
@@ -722,6 +744,8 @@ fun ClipboardImageCard(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onPreviewClick: (() -> Unit)? = null,
+    dragKey: Any? = null,
+    onStartDrag: (() -> Boolean)? = null,
 ) {
     val shape = RoundedCornerShape(8.dp)
     val bg = if (highlighted) accentColor.copy(alpha = 0.18f) else bgColor
@@ -730,10 +754,17 @@ fun ClipboardImageCard(
             .border(1.5.dp, if (highlighted) accentColor else Color.Transparent, shape)
             .clip(shape)
             .background(bg)
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = onLongClick,
-                onLongClickLabel = "更多操作"
+            // 长按/拖拽由 clipboardLongPressDrag 处理（长按未拖 → onLongClick 弹菜单）。
+            // onLongClick 必须传空回调：foundation 不传回调时长按计时器不启动、
+            // longPressTriggered 恒 false，抬起会被误 dispatch 成 onClick（上屏）
+            .combinedClickable(onClick = onClick, onLongClick = {})
+            // 拖拽手势必须放在 combinedClickable 之后（更内层）：Main pass 内层先收，
+            // combinedClickable 长按触发后会消费后续事件，外层收到的位移恒为 Zero
+            .clipboardLongPressDrag(
+                key = dragKey,
+                enabled = onStartDrag != null,
+                onLongPress = onLongClick,
+                onStartDrag = onStartDrag ?: { false },
             )
     ) {
         if (file != null) {
@@ -842,6 +873,8 @@ fun GridItemCard(
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
+    dragKey: Any? = null,
+    onStartDrag: (() -> Boolean)? = null,
 ) {
     val shape = RoundedCornerShape(8.dp)
     val bg = if (highlighted) accentColor.copy(alpha = 0.18f) else bgColor
@@ -850,10 +883,17 @@ fun GridItemCard(
             .border(1.5.dp, if (highlighted) accentColor else Color.Transparent, shape)
             .clip(shape)
             .background(bg)
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = onLongClick,
-                onLongClickLabel = "更多操作"
+            // 长按/拖拽由 clipboardLongPressDrag 处理（长按未拖 → onLongClick 弹菜单）。
+            // onLongClick 必须传空回调：foundation 不传回调时长按计时器不启动、
+            // longPressTriggered 恒 false，抬起会被误 dispatch 成 onClick（上屏）
+            .combinedClickable(onClick = onClick, onLongClick = {})
+            // 拖拽手势必须放在 combinedClickable 之后（更内层）：Main pass 内层先收，
+            // combinedClickable 长按触发后会消费后续事件，外层收到的位移恒为 Zero
+            .clipboardLongPressDrag(
+                key = dragKey,
+                enabled = onStartDrag != null,
+                onLongPress = onLongClick,
+                onStartDrag = onStartDrag ?: { false },
             )
             .padding(horizontal = 10.dp, vertical = 9.dp),
         verticalArrangement = Arrangement.Center

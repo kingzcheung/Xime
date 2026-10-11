@@ -1454,6 +1454,9 @@ fun KeyboardView(
                         },
                         onPullRemote = callbacks.onClipboardPullRemote,
                         pullRemoteAvailable = state.clipboardSyncEnabled,
+                        // 拖拽发送启动成功后收起键盘：露出目标应用输入框（Gboard 式体验），
+                        // 复用系统隐藏链路（clearInputState + requestHideSelf）
+                        onDragSendStarted = callbacks.onHideKeyboard,
                     )
                     is OverlayRoute.ToolbarCustomize -> ToolbarCustomizeView(
                         toolbarButtons = state.toolbarButtons,
